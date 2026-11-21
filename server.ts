@@ -821,6 +821,7 @@ class BingoHub {
   private dbSyncTimer: NodeJS.Timeout | null = null;
   private lastPlayerSyncIso = new Date().toISOString();
   private lastLiveSyncSignature = '';
+  private initialHydrationPromise: Promise<void>;
 
   constructor() {
     for (const stake of this.settings.stakes) {
@@ -834,12 +835,21 @@ class BingoHub {
     this.lobbyTicker = setInterval(() => {
       this.broadcastLobby();
     }, 1000);
-    void this.hydrateFromSupabase();
+    this.initialHydrationPromise = this.hydrateFromSupabase().catch((err) => {
+      console.error('[Supabase] Initial hydration error:', err);
+    });
     if (supabaseStore.isEnabled) {
       this.dbSyncTimer = setInterval(() => {
         void this.pullExternalWalletUpdates();
       }, 5000);
     }
+  }
+
+  public async waitForInitialHydration(timeoutMs = 3000): Promise<void> {
+    await Promise.race([
+      this.initialHydrationPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
   }
 
   public isAdminTelegramId(playerId: string): boolean {
@@ -2731,10 +2741,50 @@ function shouldUsePolling(): boolean {
   return false;
 }
 
-function applyBotTokenLive(savedToken: string) {
+const perChatUpdateQueue = new Map<string, Promise<void>>();
+
+function dispatchTelegramUpdate(upd: Record<string, any>, appUrl: string) {
+  const chatKey = String(
+    upd.message?.chat?.id ??
+      upd.callback_query?.message?.chat?.id ??
+      upd.callback_query?.from?.id ??
+      upd.message?.from?.id ??
+      'global'
+  );
+  const prev = perChatUpdateQueue.get(chatKey) || Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(() => botHandler.handleUpdate(upd, appUrl))
+    .catch((err) => {
+      console.error('[Telegram Bot Update Error]:', err);
+    })
+    .finally(() => {
+      if (perChatUpdateQueue.get(chatKey) === next) {
+        perChatUpdateQueue.delete(chatKey);
+      }
+    });
+  perChatUpdateQueue.set(chatKey, next);
+}
+
+async function ensureWebhookForActiveBot() {
+  if (shouldUsePolling() || !getActiveBotToken()) return;
+  const baseUrl = resolveMiniAppUrl(getAppUrl());
+  if (!baseUrl || baseUrl.includes('localhost') || baseUrl.includes('ais-dev-')) return;
+  const webhookUrl = `${baseUrl}/api/telegram/webhook`;
+  const res = await callTelegramApi('setWebhook', {
+    url: webhookUrl,
+    allowed_updates: ['message', 'callback_query'],
+    drop_pending_updates: false,
+  });
+  if (res?.ok) {
+    console.log(`[Telegram Bot] Webhook active -> ${webhookUrl}`);
+  }
+}
+
+function applyBotTokenLive(savedToken: string, knownUsername?: string | null) {
   const effective = (savedToken || '').trim() || ENV_BOT_TOKEN;
   runtimeBotToken = effective;
-  botHandler.setBotToken(effective);
+  botHandler.setBotToken(effective, knownUsername);
   pollingOffset = 0;
   pollingGeneration += 1;
   if (pollingAbortController) {
@@ -2750,8 +2800,11 @@ function applyBotTokenLive(savedToken: string) {
   for (const room of hub.rooms.values()) {
     hub.broadcastRoom(room.stakeBirr, { type: 'state:sync', state: room.getPublicState() });
   }
+  if (!effective) return;
   if (shouldUsePolling()) {
     void startTelegramPolling();
+  } else {
+    void ensureWebhookForActiveBot();
   }
 }
 
@@ -2774,6 +2827,9 @@ async function startTelegramPolling() {
     }
     const ctrl = new AbortController();
     pollingAbortController = ctrl;
+    const socketTimeout = setTimeout(() => ctrl.abort(), 25_000);
+    let delayMs = 150;
+
     try {
       const allowed = encodeURIComponent(JSON.stringify(['message', 'callback_query']));
       const res = await fetch(
@@ -2782,26 +2838,31 @@ async function startTelegramPolling() {
       );
       const data = (await res.json()) as {
         ok: boolean;
+        error_code?: number;
         description?: string;
         result?: Array<Record<string, any>>;
       };
       if (myGen !== pollingGeneration) return;
       if (!data.ok) {
         console.error('[Telegram Polling Error]:', data.description || data);
-      } else if (Array.isArray(data.result)) {
+        delayMs = data.error_code === 409 ? 1500 : 1000;
+      } else if (Array.isArray(data.result) && data.result.length > 0) {
         for (const upd of data.result) {
           pollingOffset = Math.max(pollingOffset, Number(upd.update_id) + 1);
-          await botHandler.handleUpdate(upd, appUrl);
+          dispatchTelegramUpdate(upd, appUrl);
         }
+        delayMs = 25;
       }
     } catch {
-      // Retry smoothly unless cancelled
+      delayMs = 800;
+    } finally {
+      clearTimeout(socketTimeout);
     }
     if (myGen === pollingGeneration) {
-      setTimeout(poll, 800);
+      setTimeout(poll, delayMs);
     }
   };
-  poll();
+  void poll();
 }
 
 const httpPinFailures = new Map<string, { count: number; lockUntil: number }>();
@@ -2961,7 +3022,7 @@ async function startServer() {
     }
 
     await supabaseStore.updateBotToken(cleanToken);
-    applyBotTokenLive(cleanToken);
+    applyBotTokenLive(cleanToken, verifiedUsername);
     const effective = getActiveBotToken();
     res.json({
       ok: true,
@@ -3002,14 +3063,10 @@ async function startServer() {
     });
   });
 
-  app.post('/api/telegram/webhook', async (req, res) => {
+  app.post('/api/telegram/webhook', (req, res) => {
     res.sendStatus(200);
-    if (!getActiveBotToken()) return;
-    try {
-      await botHandler.handleUpdate(req.body, getAppUrl(req));
-    } catch {
-      // Ignore webhook error
-    }
+    if (!getActiveBotToken() || !req.body) return;
+    dispatchTelegramUpdate(req.body, getAppUrl(req));
   });
 
   app.post('/api/telegram/register-webhook', async (req, res) => {
@@ -3098,9 +3155,14 @@ async function startServer() {
     }
   }
 
-  httpServer.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', async () => {
     console.log(`Cartela 24/7 Multi-Room Server running on http://0.0.0.0:${PORT}`);
-    startTelegramPolling();
+    await hub.waitForInitialHydration(3000);
+    if (shouldUsePolling()) {
+      void startTelegramPolling();
+    } else {
+      void ensureWebhookForActiveBot();
+    }
     setInterval(() => {
       if (getActiveBotToken()) {
         void botHandler.processPendingBroadcasts();

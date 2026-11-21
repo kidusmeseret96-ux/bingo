@@ -886,13 +886,16 @@ class SupabaseStore {
     this.invalidateBotCaches();
     if (this.client) {
       try {
-        await this.client
+        const { error } = await this.client
           .from('app_settings')
           .update({
             voice_preset: preset,
             updated_at: new Date().toISOString(),
           })
           .eq('id', 1);
+        if (error) {
+          console.error('[Supabase] updateVoicePreset error:', error.message);
+        }
       } catch (err) {
         console.error('[Supabase] updateVoicePreset error:', err);
       }
@@ -906,13 +909,16 @@ class SupabaseStore {
     this.invalidateBotCaches();
     if (this.client) {
       try {
-        await this.client
+        const { error } = await this.client
           .from('app_settings')
           .update({
             bot_token: clean,
             updated_at: new Date().toISOString(),
           })
           .eq('id', 1);
+        if (error) {
+          console.error('[Supabase] updateBotToken error:', error.message);
+        }
       } catch (err) {
         console.error('[Supabase] updateBotToken error:', err);
       }

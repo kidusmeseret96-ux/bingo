@@ -380,11 +380,13 @@ export class TelegramBotHandler {
     this.resolveMiniAppUrl = resolveMiniAppUrl;
   }
 
-  public setBotToken(token: string) {
+  public setBotToken(token: string, knownUsername?: string | null) {
     const clean = (token || '').trim();
     if (this.botToken !== clean) {
       this.botToken = clean;
-      this.cachedBotUsername = null;
+      this.cachedBotUsername = knownUsername ? String(knownUsername) : null;
+    } else if (knownUsername && !this.cachedBotUsername) {
+      this.cachedBotUsername = String(knownUsername);
     }
   }
 
@@ -403,6 +405,7 @@ export class TelegramBotHandler {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(12000),
       });
       const data = (await res.json()) as {
         ok: boolean;
