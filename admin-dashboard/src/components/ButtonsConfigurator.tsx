@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, Copy, Pencil, Save, Sparkles, X } from 'lucide-react';
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  CheckCircle2,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Pencil,
+  RotateCcw,
+  Save,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import type { DashboardSettings, PaymentButton } from '../types';
 
 interface Props {
@@ -26,6 +39,7 @@ interface Props {
     label: string,
     copyableText: string
   ) => Promise<void>;
+  onUpdateBotToken: (botToken: string, clear?: boolean) => Promise<string | null>;
 }
 
 const BANK_DISPLAY_NAMES: Record<string, string> = {
@@ -53,6 +67,7 @@ export const ButtonsConfigurator: React.FC<Props> = ({
   busy,
   onSaveSettings,
   onSaveBankMessage,
+  onUpdateBotToken,
 }) => {
   const [adminGroupId, setAdminGroupId] = useState(settings.admin_group_id || '');
   const [extraGroupIds, setExtraGroupIds] = useState(settings.extra_group_ids || '');
@@ -65,6 +80,9 @@ export const ButtonsConfigurator: React.FC<Props> = ({
   const [seasonTheme, setSeasonTheme] = useState(settings.season_theme || 'none');
   const [botPlayerNames, setBotPlayerNames] = useState(settings.bot_player_names || '');
   const [newPin, setNewPin] = useState('');
+  const [botTokenInput, setBotTokenInput] = useState('');
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [activeBotUsername, setActiveBotUsername] = useState<string | null>(null);
 
   useEffect(() => {
     setAdminGroupId(settings.admin_group_id || '');
@@ -268,8 +286,116 @@ export const ButtonsConfigurator: React.FC<Props> = ({
 
   const parsedCartelas = Math.min(600, Math.max(100, Math.floor(Number(maxCartelas) || 400)));
 
+  const handleSubmitBotToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = botTokenInput.trim();
+    if (!cleaned) return;
+    const username = await onUpdateBotToken(cleaned, false);
+    if (username !== null) {
+      setBotTokenInput('');
+      setActiveBotUsername(username || null);
+    }
+  };
+
+  const handleResetBotToken = async () => {
+    const res = await onUpdateBotToken('', true);
+    if (res !== null) {
+      setBotTokenInput('');
+      setActiveBotUsername(null);
+    }
+  };
+
   return (
     <div className="space-y-8">
+      {/* Telegram Bot Key / Switch Active Bot */}
+      <section className="bg-white/95 dark:bg-[#0D162E]/90 backdrop-blur-md border border-blue-200/80 dark:border-blue-500/25 rounded-2xl p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-blue-100 dark:border-blue-500/20">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 text-white flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/25">
+              <KeyRound className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Telegram Bot Key (Switch Bot)
+              </h2>
+              <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">
+                Paste a new token from @BotFather to switch Zemen Bingo to another Telegram bot live without redeploying.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`px-3 py-1 rounded-xl text-xs font-semibold border ${
+                settings.bot_token_configured
+                  ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-400/35'
+                  : 'bg-amber-50 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-400/35'
+              }`}
+            >
+              {settings.bot_token_source === 'custom'
+                ? 'Custom Dashboard Key Active'
+                : settings.bot_token_configured
+                ? 'Server Env Key Active'
+                : 'No Bot Key Configured'}
+            </span>
+            {settings.bot_token_masked && (
+              <span className="px-2.5 py-1 rounded-xl text-xs font-mono-num bg-blue-50 dark:bg-[#070E20] text-slate-700 dark:text-slate-200 border border-blue-200 dark:border-blue-500/25">
+                {settings.bot_token_masked}
+              </span>
+            )}
+            {activeBotUsername && (
+              <span className="px-2.5 py-1 rounded-xl text-xs font-semibold bg-cyan-50 dark:bg-cyan-500/15 text-cyan-800 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-400/35">
+                @{activeBotUsername}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmitBotToken} className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="relative flex-1">
+            <input
+              type={showBotToken ? 'text' : 'password'}
+              value={botTokenInput}
+              onChange={(e) => setBotTokenInput(e.target.value)}
+              placeholder="Paste new Bot Token (e.g. 1234567890:AAF...)"
+              autoComplete="off"
+              className="w-full pl-3.5 pr-10 py-2.5 text-sm font-mono tabular-nums bg-blue-50/60 dark:bg-[#070E20] border border-blue-200 dark:border-blue-500/25 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowBotToken((s) => !s)}
+              aria-label={showBotToken ? 'Hide bot key' : 'Show bot key'}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer p-1"
+            >
+              {showBotToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="submit"
+              disabled={busy || !botTokenInput.trim()}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 disabled:opacity-50 rounded-xl shadow-md shadow-blue-500/20 whitespace-nowrap cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              Verify &amp; Switch Bot
+            </button>
+
+            {settings.bot_token_source === 'custom' && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleResetBotToken()}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-blue-50 dark:bg-[#070E20] hover:bg-blue-100 dark:hover:bg-blue-500/15 border border-blue-200 dark:border-blue-500/30 rounded-xl cursor-pointer whitespace-nowrap"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Revert to Env
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
       {/* Bot Messages, Game Limits & Admin Controls */}
       <section className="bg-white/95 dark:bg-[#0D162E]/90 backdrop-blur-md border border-blue-200/80 dark:border-blue-500/25 rounded-2xl p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-blue-100 dark:border-blue-500/20">

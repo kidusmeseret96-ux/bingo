@@ -29,6 +29,8 @@ create table if not exists public.app_settings (
   custom_recent_winners jsonb,
   custom_leaderboard jsonb,
   bot_player_names text not null default '',
+  voice_preset text not null default 'classic_host',
+  bot_token text not null default '',
   updated_at timestamptz not null default now()
 );
 
@@ -45,6 +47,8 @@ alter table public.app_settings add column if not exists referral_deposit_bonus 
 alter table public.app_settings add column if not exists custom_recent_winners jsonb;
 alter table public.app_settings add column if not exists custom_leaderboard jsonb;
 alter table public.app_settings add column if not exists bot_player_names text not null default '';
+alter table public.app_settings add column if not exists voice_preset text not null default 'classic_host';
+alter table public.app_settings add column if not exists bot_token text not null default '';
 
 insert into public.app_settings (id)
 values (1)
@@ -387,7 +391,20 @@ declare
 begin
   perform public._assert_admin_pin(p_pin);
 
-  select to_jsonb(s) - 'admin_pin' into v_settings
+  select (
+    to_jsonb(s) - 'admin_pin' - 'bot_token' || jsonb_build_object(
+      'bot_token_configured', length(coalesce(s.bot_token, '')) > 0,
+      'bot_token_masked', case
+        when length(coalesce(s.bot_token, '')) >= 10 then left(s.bot_token, 6) || '...' || right(s.bot_token, 4)
+        when length(coalesce(s.bot_token, '')) > 0 then 'configured'
+        else ''
+      end,
+      'bot_token_source', case
+        when length(coalesce(s.bot_token, '')) > 0 then 'custom'
+        else 'none'
+      end
+    )
+  ) into v_settings
   from public.app_settings s where s.id = 1;
 
   select coalesce(jsonb_agg(to_jsonb(b) order by b.flow_type asc, b.sort_order asc, b.created_at asc), '[]'::jsonb)
@@ -471,6 +488,7 @@ $$;
 -- RPC 2: Update Bot Messages, Admin Groups, Max Cartelas, Vouchers, Season, Admins
 -- ============================================================================
 drop function if exists public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text);
+drop function if exists public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text, text);
 create or replace function public.admin_update_settings(
   p_pin text,
   p_admin_group_id text,
@@ -483,7 +501,8 @@ create or replace function public.admin_update_settings(
   p_max_cartelas int default null,
   p_vouchers_enabled boolean default null,
   p_season_theme text default null,
-  p_bot_player_names text default null
+  p_bot_player_names text default null,
+  p_voice_preset text default null
 )
 returns jsonb
 language plpgsql
@@ -507,12 +526,52 @@ begin
     vouchers_enabled = case when p_vouchers_enabled is not null then p_vouchers_enabled else vouchers_enabled end,
     season_theme = case when p_season_theme is not null then trim(p_season_theme) else season_theme end,
     bot_player_names = case when p_bot_player_names is not null then trim(p_bot_player_names) else bot_player_names end,
+    voice_preset = case when p_voice_preset is not null and trim(p_voice_preset) <> '' then trim(p_voice_preset) else voice_preset end,
     admin_pin = case when p_new_pin is not null and trim(p_new_pin) <> '' then trim(p_new_pin) else admin_pin end,
     updated_at = now()
   where id = 1
   returning * into v_row;
 
-  return to_jsonb(v_row) - 'admin_pin';
+  return to_jsonb(v_row) - 'admin_pin' - 'bot_token';
+end;
+$$;
+
+-- ============================================================================
+-- RPC 2B: Update Active Telegram Bot Key (Masked Response Only)
+-- ============================================================================
+create or replace function public.admin_update_bot_token(
+  p_pin text,
+  p_bot_token text default ''
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_clean text;
+begin
+  perform public._assert_admin_pin(p_pin);
+  v_clean := trim(coalesce(p_bot_token, ''));
+  if v_clean <> '' and v_clean !~ '^\d{5,}:[A-Za-z0-9_-]{20,}$' then
+    raise exception 'Invalid Telegram bot token format';
+  end if;
+
+  update public.app_settings
+  set
+    bot_token = v_clean,
+    updated_at = now()
+  where id = 1;
+
+  return jsonb_build_object(
+    'bot_token_configured', length(v_clean) > 0,
+    'bot_token_masked', case
+      when length(v_clean) >= 10 then left(v_clean, 6) || '...' || right(v_clean, 4)
+      when length(v_clean) > 0 then 'configured'
+      else ''
+    end,
+    'bot_token_source', case when length(v_clean) > 0 then 'custom' else 'none' end
+  );
 end;
 $$;
 
@@ -544,7 +603,7 @@ begin
   where id = 1
   returning * into v_row;
 
-  return to_jsonb(v_row) - 'admin_pin';
+  return to_jsonb(v_row) - 'admin_pin' - 'bot_token';
 end;
 $$;
 
@@ -662,7 +721,7 @@ begin
   set vouchers_enabled = coalesce(p_enabled, false), updated_at = now()
   where id = 1
   returning * into v_row;
-  return to_jsonb(v_row) - 'admin_pin';
+  return to_jsonb(v_row) - 'admin_pin' - 'bot_token';
 end;
 $$;
 
@@ -953,7 +1012,7 @@ begin
     updated_at = now()
   where id = 1
   returning * into v_row;
-  return to_jsonb(v_row) - 'admin_pin';
+  return to_jsonb(v_row) - 'admin_pin' - 'bot_token';
 end;
 $$;
 
@@ -1042,7 +1101,8 @@ where not exists (select 1 from public.daily_missions);
 
 -- Permissions for Supabase Anon/Authenticated RPC callers
 grant execute on function public.admin_get_dashboard(text) to anon, authenticated;
-grant execute on function public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text, text) to anon, authenticated;
+grant execute on function public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text, text, text) to anon, authenticated;
+grant execute on function public.admin_update_bot_token(text, text) to anon, authenticated;
 grant execute on function public.admin_update_referral_settings(text, numeric, numeric, numeric) to anon, authenticated;
 grant execute on function public.admin_update_bank_message(text, uuid, text, boolean, text) to anon, authenticated;
 grant execute on function public.admin_adjust_player_balance(text, text, numeric, numeric) to anon, authenticated;

@@ -28,6 +28,7 @@ import {
   Trash2,
   Trophy,
   Users,
+  Volume2,
   Wallet,
 } from 'lucide-react';
 import type {
@@ -43,6 +44,8 @@ import { ButtonsConfigurator } from './components/ButtonsConfigurator';
 import { BotFlowEditor } from './components/BotFlowEditor';
 import { VouchersPanel } from './components/VouchersPanel';
 import { EventsMissionsTiersPanel } from './components/EventsMissionsTiersPanel';
+import { VoiceStudioPanel } from './components/VoiceStudioPanel';
+import type { VoicePresetId } from '../../shared/bingo';
 
 type NavTab =
   | 'overview'
@@ -53,6 +56,7 @@ type NavTab =
   | 'vouchers'
   | 'events'
   | 'flows'
+  | 'voices'
   | 'broadcast'
   | 'bot';
 
@@ -438,14 +442,20 @@ export default function App() {
         p_vouchers_enabled: patch.vouchers_enabled,
         p_season_theme: patch.season_theme,
         p_bot_player_names: patch.bot_player_names,
+        p_voice_preset: snapshot?.settings?.voice_preset || 'classic_host',
       };
       let { error } = await client.rpc('admin_update_settings', rpcPayload);
       if (error) {
-        const legacyPayload = { ...rpcPayload } as Record<string, unknown>;
-        delete legacyPayload.p_bot_player_names;
-        const retry = await client.rpc('admin_update_settings', legacyPayload);
-        if (retry.error) {
-          throw new Error(error.message || retry.error.message);
+        const noVoicePayload = { ...rpcPayload } as Record<string, unknown>;
+        delete noVoicePayload.p_voice_preset;
+        const retryVoice = await client.rpc('admin_update_settings', noVoicePayload);
+        if (retryVoice.error) {
+          const legacyPayload = { ...noVoicePayload } as Record<string, unknown>;
+          delete legacyPayload.p_bot_player_names;
+          const retryLegacy = await client.rpc('admin_update_settings', legacyPayload);
+          if (retryLegacy.error) {
+            throw new Error(error.message || retryLegacy.error.message);
+          }
         }
       }
       const nextPin = patch.new_pin || activePin;
@@ -462,6 +472,113 @@ export default function App() {
       flashNotice('Bot settings, player names, cartela limits & admin list saved.');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed saving settings.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSelectVoicePreset = async (voicePreset: VoicePresetId) => {
+    if (!client) return;
+    setBusy(true);
+    setErrorMsg(null);
+    try {
+      const apiRes = await fetch('/api/admin/voice-preset', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: activePin, voice_preset: voicePreset }),
+      }).catch(() => null);
+
+      if (apiRes && !apiRes.ok && apiRes.status !== 404) {
+        const body = (await apiRes.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || 'Failed saving voice preset.');
+      }
+
+      if (snapshot?.settings) {
+        const { error } = await client.rpc('admin_update_settings', {
+          p_pin: activePin,
+          p_admin_group_id: snapshot.settings.admin_group_id || '',
+          p_deposit_intro: snapshot.settings.deposit_intro_text || '',
+          p_withdraw_intro: snapshot.settings.withdraw_intro_text || '',
+          p_withdraw_prompt: snapshot.settings.withdraw_prompt_text || '',
+          p_new_pin: null,
+          p_extra_group_ids: snapshot.settings.extra_group_ids || '',
+          p_extra_admin_ids: snapshot.settings.extra_admin_ids || '',
+          p_max_cartelas: snapshot.settings.max_cartelas ?? 400,
+          p_vouchers_enabled: Boolean(snapshot.settings.vouchers_enabled),
+          p_season_theme: snapshot.settings.season_theme || 'none',
+          p_bot_player_names: snapshot.settings.bot_player_names || '',
+          p_voice_preset: voicePreset,
+        });
+        if (error && !apiRes?.ok) {
+          throw new Error(error.message);
+        }
+      }
+
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              settings: { ...prev.settings, voice_preset: voicePreset },
+            }
+          : prev
+      );
+      flashNotice('Caller voice updated live across all bingo rooms.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed switching voice preset.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpdateBotToken = async (botToken: string, clear = false): Promise<string | null> => {
+    if (!client) return null;
+    setBusy(true);
+    setErrorMsg(null);
+    try {
+      const apiRes = await fetch('/api/admin/bot-token', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: activePin, bot_token: botToken, clear }),
+      }).catch(() => null);
+
+      if (apiRes && apiRes.ok) {
+        const data = (await apiRes.json().catch(() => ({}))) as {
+          bot_token_configured?: boolean;
+          bot_token_masked?: string;
+          bot_token_source?: 'custom' | 'env' | 'none';
+          bot_username?: string | null;
+        };
+        await fetchSnapshot(client, activePin);
+        flashNotice(
+          clear
+            ? 'Reverted to server environment Telegram Bot Key.'
+            : `Verified and switched active Telegram Bot${data.bot_username ? ` (@${data.bot_username})` : ''}!`
+        );
+        return data.bot_username || '';
+      }
+
+      if (apiRes && apiRes.status !== 404) {
+        const body = (await apiRes.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || 'Failed updating Telegram Bot Key.');
+      }
+
+      const { data, error } = await client.rpc('admin_update_bot_token', {
+        p_pin: activePin,
+        p_bot_token: clear ? '' : botToken,
+      });
+      if (error) throw new Error(error.message);
+      await fetchSnapshot(client, activePin);
+      flashNotice(
+        clear
+          ? 'Cleared custom Bot Key in Supabase.'
+          : `Bot Key saved (${(data as { bot_token_masked?: string })?.bot_token_masked || 'configured'}). Live server syncs automatically.`
+      );
+      return '';
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed updating Telegram Bot Key.');
+      return null;
     } finally {
       setBusy(false);
     }
@@ -1121,6 +1238,7 @@ export default function App() {
     { id: 'events', label: 'Events, Missions & Ranks', icon: <Sparkles className="w-4 h-4" /> },
     { id: 'referrals', label: 'Referrals', icon: <Gift className="w-4 h-4" /> },
     { id: 'flows', label: 'Bot Texts & Flows', icon: <MessageSquareText className="w-4 h-4" /> },
+    { id: 'voices', label: 'Caller Voices (20)', icon: <Volume2 className="w-4 h-4" /> },
     { id: 'broadcast', label: 'Targeted Broadcast & Clear', icon: <Megaphone className="w-4 h-4" /> },
     { id: 'bot', label: 'Banks, Limits & Bot Settings', icon: <Settings2 className="w-4 h-4" /> },
   ];
@@ -2174,6 +2292,15 @@ export default function App() {
             </div>
           )}
 
+          {/* CALLER VOICES STUDIO (20 VOICES) */}
+          {tab === 'voices' && (
+            <VoiceStudioPanel
+              activeVoicePreset={snapshot.settings.voice_preset}
+              busy={busy}
+              onSelectVoice={handleSelectVoicePreset}
+            />
+          )}
+
           {/* BANK MESSAGES & BOT SETTINGS */}
           {tab === 'bot' && (
             <ButtonsConfigurator
@@ -2182,6 +2309,7 @@ export default function App() {
               busy={busy}
               onSaveSettings={handleSaveSettings}
               onSaveBankMessage={handleSaveBankMessage}
+              onUpdateBotToken={handleUpdateBotToken}
             />
           )}
         </main>

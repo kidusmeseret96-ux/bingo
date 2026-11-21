@@ -34,13 +34,15 @@ import {
   type ServerMessage,
   type SpecialEvent,
   TOTAL_CARTELAS,
+  type VoicePresetId,
   checkWinningPattern,
   computeRankTier,
   generateCartelaGrid,
   getBallLetter,
+  normalizeVoicePreset,
   validateCustomGrid,
 } from './shared/bingo.ts';
-import { supabaseStore } from './server-db.ts';
+import { maskBotToken, supabaseStore } from './server-db.ts';
 import { TelegramBotHandler } from './server-bot.ts';
 
 dotenv.config();
@@ -49,7 +51,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const ENV_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+let runtimeBotToken = ENV_BOT_TOKEN;
+function getActiveBotToken(): string {
+  return runtimeBotToken || ENV_BOT_TOKEN;
+}
 const USE_POLLING = process.env.TELEGRAM_USE_POLLING === 'true';
 let EFFECTIVE_ADMIN_PIN = (process.env.ADMIN_PIN || '1234').trim();
 const STARTING_DEPOSIT = Math.max(0, Number(process.env.INITIAL_DEPOSIT_BIRR) || INITIAL_DEPOSIT_BIRR);
@@ -61,7 +67,7 @@ const ADMIN_TG_IDS = new Set(
     .map((s) => (s.startsWith('tg_') ? s : `tg_${s}`))
 );
 
-const WS_AUTH_SECRET = (process.env.WS_AUTH_SECRET || BOT_TOKEN || crypto.randomBytes(32).toString('hex')).trim();
+const WS_AUTH_SECRET = (process.env.WS_AUTH_SECRET || ENV_BOT_TOKEN || crypto.randomBytes(32).toString('hex')).trim();
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_INITDATA_MAX_AGE_SEC = 24 * 60 * 60;
 
@@ -763,7 +769,7 @@ class BingoRoom {
       winners: this.winners,
       recentWinners: this.hub.getRecentWinners(15),
       leaderboard: this.hub.getLeaderboard(),
-      botConfigured: Boolean(BOT_TOKEN),
+      botConfigured: Boolean(getActiveBotToken()),
       settings: {
         ...this.hub.settings,
         stakes: [...this.hub.settings.stakes],
@@ -786,6 +792,7 @@ class BingoHub {
     })(),
     maxCartelas: TOTAL_CARTELAS,
     seasonTheme: 'none',
+    voicePreset: 'classic_host',
     rankThresholds: { ...DEFAULT_RANK_THRESHOLDS },
     missionCompletionBonus: 50,
     onlineCountOverride: null,
@@ -905,6 +912,8 @@ class BingoHub {
     customRecentWinners?: RoundWinner[] | null;
     customLeaderboard?: LeaderboardEntry[] | null;
     botPlayerNames?: string[];
+    voicePreset?: VoicePresetId;
+    botToken?: string;
   }) {
     if (config.adminPin) {
       EFFECTIVE_ADMIN_PIN = config.adminPin;
@@ -920,6 +929,15 @@ class BingoHub {
     }
     if (config.seasonTheme) {
       this.settings.seasonTheme = config.seasonTheme;
+    }
+    if (config.voicePreset) {
+      this.settings.voicePreset = normalizeVoicePreset(config.voicePreset);
+    }
+    if (typeof config.botToken === 'string') {
+      const targetEffective = config.botToken.trim() || ENV_BOT_TOKEN;
+      if (targetEffective !== getActiveBotToken()) {
+        applyBotTokenLive(config.botToken);
+      }
     }
     if (config.rankThresholds) {
       const prev = this.settings.rankThresholds;
@@ -991,6 +1009,15 @@ class BingoHub {
 
   public applyBotPlayerNamesLive(names: string[]) {
     this.applyLiveConfig({ botPlayerNames: names });
+    for (const room of this.rooms.values()) {
+      this.broadcastRoom(room.stakeBirr, { type: 'state:sync', state: room.getPublicState() });
+    }
+    this.broadcastLobby();
+    this.broadcastAdmins();
+  }
+
+  public applyVoicePresetLive(preset: VoicePresetId) {
+    this.applyLiveConfig({ voicePreset: preset });
     for (const room of this.rooms.values()) {
       this.broadcastRoom(room.stakeBirr, { type: 'state:sync', state: room.getPublicState() });
     }
@@ -1493,7 +1520,7 @@ class BingoHub {
         rankThresholds: { ...this.settings.rankThresholds },
       },
       onlineCount: this.getTotalOnlineCount(),
-      botConfigured: Boolean(BOT_TOKEN),
+      botConfigured: Boolean(getActiveBotToken()),
       serverTime: Date.now(),
     };
   }
@@ -1616,7 +1643,7 @@ class BingoHub {
       const rawId = (msg.player?.id || '').trim().slice(0, 64);
       const claimsTelegram = Boolean(msg.player?.isTelegram) || rawId.startsWith('tg_');
 
-      if (!verifiedPlayer && BOT_TOKEN && claimsTelegram) {
+      if (!verifiedPlayer && getActiveBotToken() && claimsTelegram) {
         this.send(ws, {
           type: 'action:error',
           message: 'Telegram session verification required. Please reopen the game from Telegram.',
@@ -2640,6 +2667,8 @@ class BingoHub {
         }
         this.broadcastAdmins();
       },
+      getEffectiveBotToken: () => getActiveBotToken(),
+      onBotTokenUpdated: (savedToken) => applyBotTokenLive(savedToken),
     });
     return res;
   }
@@ -2663,7 +2692,7 @@ function resolveMiniAppUrl(fallbackUrl: string): string {
 }
 
 const botHandler = new TelegramBotHandler(
-  BOT_TOKEN,
+  getActiveBotToken(),
   {
     getWalletSnapshot: (playerId, name, username) => hub.ensureWallet(playerId, name, username),
     hasPlayer: (playerId) => hub.hasPlayer(playerId),
@@ -2689,9 +2718,11 @@ async function callTelegramApi(method: string, body: Record<string, unknown>) {
 
 let pollingOffset = 0;
 let pollingActive = false;
+let pollingGeneration = 0;
+let pollingAbortController: AbortController | null = null;
 
 function shouldUsePolling(): boolean {
-  if (!BOT_TOKEN) return false;
+  if (!getActiveBotToken()) return false;
   if (USE_POLLING) return true;
   const envUrl = (process.env.APP_URL || '').trim();
   if (!envUrl || envUrl === 'MY_APP_URL' || envUrl.includes('ais-dev-') || envUrl.includes('localhost')) {
@@ -2700,25 +2731,61 @@ function shouldUsePolling(): boolean {
   return false;
 }
 
+function applyBotTokenLive(savedToken: string) {
+  const effective = (savedToken || '').trim() || ENV_BOT_TOKEN;
+  runtimeBotToken = effective;
+  botHandler.setBotToken(effective);
+  pollingOffset = 0;
+  pollingGeneration += 1;
+  if (pollingAbortController) {
+    try {
+      pollingAbortController.abort();
+    } catch {
+      // ignore
+    }
+    pollingAbortController = null;
+  }
+  pollingActive = false;
+  hub.broadcastLobby();
+  for (const room of hub.rooms.values()) {
+    hub.broadcastRoom(room.stakeBirr, { type: 'state:sync', state: room.getPublicState() });
+  }
+  if (shouldUsePolling()) {
+    void startTelegramPolling();
+  }
+}
+
 async function startTelegramPolling() {
   if (!shouldUsePolling() || pollingActive) return;
   pollingActive = true;
+  const myGen = pollingGeneration;
   const appUrl = getAppUrl();
 
   await callTelegramApi('deleteWebhook', { drop_pending_updates: false });
+  if (myGen !== pollingGeneration) return;
   console.log('[Telegram Bot] Long-polling active (outbound getUpdates)...');
 
   const poll = async () => {
+    if (myGen !== pollingGeneration) return;
+    const token = getActiveBotToken();
+    if (!token) {
+      pollingActive = false;
+      return;
+    }
+    const ctrl = new AbortController();
+    pollingAbortController = ctrl;
     try {
       const allowed = encodeURIComponent(JSON.stringify(['message', 'callback_query']));
       const res = await fetch(
-        `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${pollingOffset}&timeout=20&allowed_updates=${allowed}`
+        `https://api.telegram.org/bot${token}/getUpdates?offset=${pollingOffset}&timeout=20&allowed_updates=${allowed}`,
+        { signal: ctrl.signal }
       );
       const data = (await res.json()) as {
         ok: boolean;
         description?: string;
         result?: Array<Record<string, any>>;
       };
+      if (myGen !== pollingGeneration) return;
       if (!data.ok) {
         console.error('[Telegram Polling Error]:', data.description || data);
       } else if (Array.isArray(data.result)) {
@@ -2728,11 +2795,41 @@ async function startTelegramPolling() {
         }
       }
     } catch {
-      // Retry smoothly
+      // Retry smoothly unless cancelled
     }
-    setTimeout(poll, 800);
+    if (myGen === pollingGeneration) {
+      setTimeout(poll, 800);
+    }
   };
   poll();
+}
+
+const httpPinFailures = new Map<string, { count: number; lockUntil: number }>();
+
+async function verifyHttpAdminPin(req: express.Request, pinInput: unknown): Promise<{ ok: boolean; status: number; error: string }> {
+  const clientIp = String(req.ip || req.socket?.remoteAddress || 'unknown');
+  const now = Date.now();
+  const state = httpPinFailures.get(clientIp);
+  if (state && state.lockUntil > now) {
+    const waitSec = Math.ceil((state.lockUntil - now) / 1000);
+    return { ok: false, status: 429, error: `Too many invalid PIN attempts. Try again in ${waitSec}s.` };
+  }
+  const providedPin = typeof pinInput === 'string' ? pinInput.trim() : '';
+  let authorized = Boolean(providedPin && safeEqualText(providedPin, EFFECTIVE_ADMIN_PIN));
+  if (!authorized && providedPin && supabaseStore.isEnabled) {
+    const check = await hub.handleExternalAdminRpc('admin_get_dashboard', { p_pin: providedPin });
+    authorized = !check.error;
+  }
+  if (!authorized) {
+    const nextCount = (state?.count || 0) + 1;
+    httpPinFailures.set(clientIp, {
+      count: nextCount,
+      lockUntil: nextCount >= 8 ? now + 60_000 : 0,
+    });
+    return { ok: false, status: 401, error: 'Invalid Admin PIN.' };
+  }
+  httpPinFailures.delete(clientIp);
+  return { ok: true, status: 200, error: '' };
 }
 
 async function startServer() {
@@ -2782,14 +2879,9 @@ async function startServer() {
       pin?: string;
       bot_player_names?: string;
     };
-    const providedPin = typeof pin === 'string' ? pin.trim() : '';
-    let authorized = Boolean(providedPin && safeEqualText(providedPin, EFFECTIVE_ADMIN_PIN));
-    if (!authorized && providedPin && supabaseStore.isEnabled) {
-      const check = await hub.handleExternalAdminRpc('admin_get_dashboard', { p_pin: providedPin });
-      authorized = !check.error;
-    }
-    if (!authorized) {
-      res.status(401).json({ error: 'Invalid Admin PIN.' });
+    const auth = await verifyHttpAdminPin(req, pin);
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.error });
       return;
     }
     const parsed = await supabaseStore.updateBotPlayerNames(String(bot_player_names ?? ''));
@@ -2797,13 +2889,97 @@ async function startServer() {
     res.json({ ok: true, bot_player_names: parsed });
   });
 
+  app.post('/api/admin/voice-preset', async (req, res) => {
+    const { pin, voice_preset } = (req.body || {}) as {
+      pin?: string;
+      voice_preset?: string;
+    };
+    const auth = await verifyHttpAdminPin(req, pin);
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.error });
+      return;
+    }
+    const preset = await supabaseStore.updateVoicePreset(voice_preset);
+    hub.applyVoicePresetLive(preset);
+    res.json({ ok: true, voice_preset: preset });
+  });
+
+  app.post('/api/admin/bot-token', async (req, res) => {
+    const { pin, bot_token, clear } = (req.body || {}) as {
+      pin?: string;
+      bot_token?: string;
+      clear?: boolean;
+    };
+    const auth = await verifyHttpAdminPin(req, pin);
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.error });
+      return;
+    }
+
+    if (clear) {
+      await supabaseStore.updateBotToken('');
+      applyBotTokenLive('');
+      const effective = getActiveBotToken();
+      res.json({
+        ok: true,
+        bot_token_configured: Boolean(effective),
+        bot_token_masked: maskBotToken(effective),
+        bot_token_source: effective ? 'env' : 'none',
+        bot_username: null,
+      });
+      return;
+    }
+
+    const cleanToken = typeof bot_token === 'string' ? bot_token.trim() : '';
+    if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(cleanToken)) {
+      res.status(400).json({ error: 'Invalid Telegram Bot Token format. Paste the full token from @BotFather.' });
+      return;
+    }
+
+    let verifiedUsername: string | null = null;
+    try {
+      const verifyRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const verifyData = (await verifyRes.json().catch(() => null)) as {
+        ok?: boolean;
+        description?: string;
+        result?: { username?: string };
+      } | null;
+      if (!verifyRes.ok || !verifyData?.ok || !verifyData.result) {
+        res.status(400).json({
+          error: verifyData?.description
+            ? `Telegram rejected token: ${verifyData.description}`
+            : 'Telegram rejected this bot token.',
+        });
+        return;
+      }
+      verifiedUsername = verifyData.result.username ? String(verifyData.result.username) : null;
+    } catch {
+      res.status(502).json({ error: 'Could not reach Telegram API to verify token. Please try again.' });
+      return;
+    }
+
+    await supabaseStore.updateBotToken(cleanToken);
+    applyBotTokenLive(cleanToken);
+    const effective = getActiveBotToken();
+    res.json({
+      ok: true,
+      bot_token_configured: Boolean(effective),
+      bot_token_masked: maskBotToken(effective),
+      bot_token_source: 'custom',
+      bot_username: verifiedUsername,
+    });
+  });
+
   app.post('/api/auth/telegram', (req, res) => {
     const { initData } = req.body as { initData?: string };
-    if (!BOT_TOKEN) {
+    const activeToken = getActiveBotToken();
+    if (!activeToken) {
       res.status(200).json({ verified: false, reason: 'No TELEGRAM_BOT_TOKEN set; using client profile.' });
       return;
     }
-    const player = verifyTelegramInitData(initData || '', BOT_TOKEN);
+    const player = verifyTelegramInitData(initData || '', activeToken);
     if (!player) {
       res.status(401).json({ verified: false, reason: 'Invalid Telegram initData signature.' });
       return;
@@ -2813,7 +2989,7 @@ async function startServer() {
   });
 
   app.get('/api/telegram/status', async (_req, res) => {
-    if (!BOT_TOKEN) {
+    if (!getActiveBotToken()) {
       res.json({ botConfigured: false, pollingActive: false });
       return;
     }
@@ -2828,7 +3004,7 @@ async function startServer() {
 
   app.post('/api/telegram/webhook', async (req, res) => {
     res.sendStatus(200);
-    if (!BOT_TOKEN) return;
+    if (!getActiveBotToken()) return;
     try {
       await botHandler.handleUpdate(req.body, getAppUrl(req));
     } catch {
@@ -2837,7 +3013,7 @@ async function startServer() {
   });
 
   app.post('/api/telegram/register-webhook', async (req, res) => {
-    if (!BOT_TOKEN) {
+    if (!getActiveBotToken()) {
       res.status(400).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN is not configured on the server.' });
       return;
     }
@@ -2925,11 +3101,11 @@ async function startServer() {
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Cartela 24/7 Multi-Room Server running on http://0.0.0.0:${PORT}`);
     startTelegramPolling();
-    if (BOT_TOKEN) {
-      setInterval(() => {
+    setInterval(() => {
+      if (getActiveBotToken()) {
         void botHandler.processPendingBroadcasts();
-      }, 3000);
-    }
+      }
+    }, 3000);
   });
 }
 

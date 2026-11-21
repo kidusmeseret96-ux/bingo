@@ -206,6 +206,11 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
+    const preset = gameState?.settings?.voicePreset ?? lobby?.settings?.voicePreset ?? 'classic_host';
+    soundEngine.setVoicePreset(preset);
+  }, [gameState?.settings?.voicePreset, lobby?.settings?.voicePreset]);
+
+  useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('admin') === '1') {

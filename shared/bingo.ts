@@ -4,6 +4,423 @@ export type GamePhase = 'OPENING' | 'CALLING' | 'ENDED';
 
 export type AppLanguage = 'en' | 'am' | 'om';
 
+export type VoicePresetId =
+  | 'classic_host'
+  | 'serious_narrator'
+  | 'stern_commander'
+  | 'slow_solemn'
+  | 'rapid_blitz'
+  | 'turbo_auctioneer'
+  | 'iron_judge'
+  | 'midnight_radio'
+  | 'grand_arena'
+  | 'news_anchor'
+  | 'velvet_baritone'
+  | 'hype_mc'
+  | 'royal_herald'
+  | 'whisper_tension'
+  | 'vintage_gramophone'
+  | 'drill_sergeant'
+  | 'calm_zen'
+  | 'cyber_android'
+  | 'golden_gala'
+  | 'lightning_caller';
+
+export interface VoicePresetDefinition {
+  id: VoicePresetId;
+  number: number;
+  name: string;
+  styleTag: string;
+  description: string;
+  tempo: number;
+  pitch: number;
+  bassDb: number;
+  midHz: number;
+  midDb: number;
+  highDb: number;
+  lowPassHz?: number;
+  highPassHz?: number;
+  drive: number;
+  compress: boolean;
+  echoDelayMs?: number;
+  echoMix?: number;
+  preferMale?: boolean;
+}
+
+export const VOICE_PRESETS: VoicePresetDefinition[] = [
+  {
+    id: 'classic_host',
+    number: 1,
+    name: 'Classic Bingo Host',
+    styleTag: 'Balanced',
+    description: 'Clean, natural hall pacing and clear midrange.',
+    tempo: 1.0,
+    pitch: 1.0,
+    bassDb: 1,
+    midHz: 1400,
+    midDb: 1,
+    highDb: 1,
+    drive: 0,
+    compress: false,
+    preferMale: true,
+  },
+  {
+    id: 'serious_narrator',
+    number: 2,
+    name: 'Serious Narrator',
+    styleTag: 'Serious · Slower',
+    description: 'Measured documentary cadence with deep studio chest warmth.',
+    tempo: 0.85,
+    pitch: 0.86,
+    bassDb: 7,
+    midHz: 950,
+    midDb: -2,
+    highDb: -2,
+    lowPassHz: 5200,
+    highPassHz: 70,
+    drive: 0.08,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'stern_commander',
+    number: 3,
+    name: 'Stern Commander',
+    styleTag: 'More Stern',
+    description: 'Commanding low tone, sharp articulation, zero nonsense.',
+    tempo: 0.94,
+    pitch: 0.84,
+    bassDb: 6,
+    midHz: 2300,
+    midDb: 5,
+    highDb: 2,
+    highPassHz: 95,
+    drive: 0.18,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'slow_solemn',
+    number: 4,
+    name: 'Slow & Solemn',
+    styleTag: 'Slowest',
+    description: 'Slow, heavy, deliberate delivery for high-stakes tension.',
+    tempo: 0.77,
+    pitch: 0.88,
+    bassDb: 6,
+    midHz: 750,
+    midDb: 1,
+    highDb: -5,
+    lowPassHz: 3900,
+    drive: 0.05,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'rapid_blitz',
+    number: 5,
+    name: 'Fast Blitz Caller',
+    styleTag: 'Faster',
+    description: 'Brisk rapid-fire pacing with energetic lift.',
+    tempo: 1.28,
+    pitch: 1.06,
+    bassDb: -2,
+    midHz: 2100,
+    midDb: 4,
+    highDb: 4,
+    highPassHz: 140,
+    drive: 0.05,
+    compress: true,
+    preferMale: false,
+  },
+  {
+    id: 'turbo_auctioneer',
+    number: 6,
+    name: 'Turbo Auctioneer',
+    styleTag: 'Fastest',
+    description: 'Ultra-fast auction rhythm with tight dry punch.',
+    tempo: 1.38,
+    pitch: 1.02,
+    bassDb: -3,
+    midHz: 2600,
+    midDb: 6,
+    highDb: 5,
+    highPassHz: 180,
+    drive: 0.12,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'iron_judge',
+    number: 7,
+    name: 'Iron Judge',
+    styleTag: 'Ultra Stern',
+    description: 'Gravelly ultra-deep authority with hard broadcast limiting.',
+    tempo: 0.88,
+    pitch: 0.79,
+    bassDb: 9,
+    midHz: 1850,
+    midDb: 4,
+    highDb: -3,
+    lowPassHz: 4600,
+    highPassHz: 65,
+    drive: 0.28,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'midnight_radio',
+    number: 8,
+    name: 'Midnight FM Host',
+    styleTag: 'Smooth · Deep',
+    description: 'Silky late-night radio bass warmth and unhurried tempo.',
+    tempo: 0.9,
+    pitch: 0.89,
+    bassDb: 8,
+    midHz: 1100,
+    midDb: -3,
+    highDb: 2,
+    lowPassHz: 5600,
+    highPassHz: 60,
+    drive: 0.04,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'grand_arena',
+    number: 9,
+    name: 'Grand Stadium PA',
+    styleTag: 'Arena Hall',
+    description: 'Booming hall projection with subtle live arena echo.',
+    tempo: 0.95,
+    pitch: 0.92,
+    bassDb: 4,
+    midHz: 1700,
+    midDb: 5,
+    highDb: 2,
+    highPassHz: 110,
+    drive: 0.14,
+    compress: true,
+    echoDelayMs: 68,
+    echoMix: 0.24,
+    preferMale: true,
+  },
+  {
+    id: 'news_anchor',
+    number: 10,
+    name: 'Prime News Anchor',
+    styleTag: 'Crisp · Brisk',
+    description: 'Broadcast journalism precision, crisp highs, steady drive.',
+    tempo: 1.14,
+    pitch: 1.02,
+    bassDb: 0,
+    midHz: 2400,
+    midDb: 5,
+    highDb: 4,
+    highPassHz: 130,
+    drive: 0.03,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'velvet_baritone',
+    number: 11,
+    name: 'Deep Baritone',
+    styleTag: 'Sub-Bass · Slow',
+    description: 'Ultra-low velvet register with relaxed serious gravitas.',
+    tempo: 0.83,
+    pitch: 0.77,
+    bassDb: 10,
+    midHz: 850,
+    midDb: -4,
+    highDb: -4,
+    lowPassHz: 4200,
+    drive: 0.06,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'hype_mc',
+    number: 12,
+    name: 'Party Hype MC',
+    styleTag: 'Fast · Bright',
+    description: 'High-energy bright club host with quick upbeat cadence.',
+    tempo: 1.22,
+    pitch: 1.12,
+    bassDb: 1,
+    midHz: 2200,
+    midDb: 3,
+    highDb: 6,
+    highPassHz: 150,
+    drive: 0.08,
+    compress: true,
+    echoDelayMs: 42,
+    echoMix: 0.14,
+    preferMale: false,
+  },
+  {
+    id: 'royal_herald',
+    number: 13,
+    name: 'Royal Court Herald',
+    styleTag: 'Regal · Slow',
+    description: 'Ceremonial palace announcement tone with rich hall depth.',
+    tempo: 0.84,
+    pitch: 0.94,
+    bassDb: 4,
+    midHz: 1350,
+    midDb: 4,
+    highDb: 1,
+    drive: 0.04,
+    compress: true,
+    echoDelayMs: 85,
+    echoMix: 0.26,
+    preferMale: true,
+  },
+  {
+    id: 'whisper_tension',
+    number: 14,
+    name: 'Suspense Whisper',
+    styleTag: 'Soft · Slow',
+    description: 'Hushed, close-mic breathy delivery for tense finales.',
+    tempo: 0.81,
+    pitch: 1.04,
+    bassDb: -6,
+    midHz: 1500,
+    midDb: -3,
+    highDb: 7,
+    highPassHz: 240,
+    drive: 0.02,
+    compress: false,
+    preferMale: false,
+  },
+  {
+    id: 'vintage_gramophone',
+    number: 15,
+    name: 'Vintage AM Radio',
+    styleTag: 'Retro Warm',
+    description: 'Classic mid-focused broadcast horn with warm analog grit.',
+    tempo: 0.98,
+    pitch: 0.98,
+    bassDb: -5,
+    midHz: 1450,
+    midDb: 8,
+    highDb: -7,
+    lowPassHz: 2900,
+    highPassHz: 340,
+    drive: 0.3,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'drill_sergeant',
+    number: 16,
+    name: 'Strict Sergeant',
+    styleTag: 'Fast & Stern',
+    description: 'Snappy, barked military cadence with punchy forward bite.',
+    tempo: 1.18,
+    pitch: 0.9,
+    bassDb: 3,
+    midHz: 1950,
+    midDb: 7,
+    highDb: 3,
+    highPassHz: 170,
+    drive: 0.34,
+    compress: true,
+    preferMale: true,
+  },
+  {
+    id: 'calm_zen',
+    number: 17,
+    name: 'Calm Lounge Guide',
+    styleTag: 'Gentle · Slow',
+    description: 'Soothing, soft-edged tone at an easy unhurried pace.',
+    tempo: 0.84,
+    pitch: 1.03,
+    bassDb: 2,
+    midHz: 900,
+    midDb: -2,
+    highDb: -4,
+    lowPassHz: 4500,
+    drive: 0,
+    compress: false,
+    preferMale: false,
+  },
+  {
+    id: 'cyber_android',
+    number: 18,
+    name: 'Cyber AI Core',
+    styleTag: 'Synthetic',
+    description: 'Precision futuristic metallic resonance with tight slapback.',
+    tempo: 1.07,
+    pitch: 0.95,
+    bassDb: 0,
+    midHz: 2050,
+    midDb: 6,
+    highDb: 5,
+    highPassHz: 210,
+    drive: 0.16,
+    compress: true,
+    echoDelayMs: 24,
+    echoMix: 0.28,
+    preferMale: true,
+  },
+  {
+    id: 'golden_gala',
+    number: 19,
+    name: 'Golden Gala MC',
+    styleTag: 'Stage Sparkle',
+    description: 'Polished tuxedo stage presenter with bright studio shimmer.',
+    tempo: 0.97,
+    pitch: 1.05,
+    bassDb: 2,
+    midHz: 1650,
+    midDb: 2,
+    highDb: 5,
+    highPassHz: 90,
+    drive: 0.04,
+    compress: true,
+    echoDelayMs: 52,
+    echoMix: 0.15,
+    preferMale: false,
+  },
+  {
+    id: 'lightning_caller',
+    number: 20,
+    name: 'Lightning Express',
+    styleTag: 'Fast & Deep',
+    description: 'Fast pro speed paired with a grounded lower register.',
+    tempo: 1.26,
+    pitch: 0.91,
+    bassDb: 5,
+    midHz: 2250,
+    midDb: 4,
+    highDb: 2,
+    highPassHz: 100,
+    drive: 0.12,
+    compress: true,
+    preferMale: true,
+  },
+];
+
+const VOICE_PRESET_MAP = new Map<string, VoicePresetDefinition>(
+  VOICE_PRESETS.map((v) => [v.id, v])
+);
+
+export function getVoicePreset(id: unknown): VoicePresetDefinition {
+  if (typeof id === 'string') {
+    const found = VOICE_PRESET_MAP.get(id);
+    if (found) return found;
+  }
+  return VOICE_PRESETS[0];
+}
+
+export function normalizeVoicePreset(raw: unknown): VoicePresetId {
+  if (typeof raw === 'string' && VOICE_PRESET_MAP.has(raw)) {
+    return raw as VoicePresetId;
+  }
+  return 'classic_host';
+}
+
 export const BINGO_LETTERS: BingoLetter[] = ['B', 'I', 'N', 'G', 'O'];
 
 export const TOTAL_CARTELAS = 400;
@@ -492,6 +909,7 @@ export interface HouseSettings {
   callIntervalSeconds: number;
   maxCartelas: number;
   seasonTheme: SeasonThemeId;
+  voicePreset?: VoicePresetId;
   rankThresholds: RankThresholds;
   missionCompletionBonus: number;
   onlineCountOverride: number | null;

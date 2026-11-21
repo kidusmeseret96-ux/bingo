@@ -366,7 +366,7 @@ export class TelegramBotHandler {
   private pendingAdminAmounts = new Map<string, PendingAdminAmountInput>();
   private cachedBotUsername: string | null = null;
   private isProcessingBroadcasts = false;
-  private readonly botToken: string;
+  private botToken: string;
   private readonly hub: BotHubBridge;
   private readonly resolveMiniAppUrl: (fallbackUrl: string) => string;
 
@@ -378,6 +378,22 @@ export class TelegramBotHandler {
     this.botToken = botToken;
     this.hub = hub;
     this.resolveMiniAppUrl = resolveMiniAppUrl;
+  }
+
+  public setBotToken(token: string) {
+    const clean = (token || '').trim();
+    if (this.botToken !== clean) {
+      this.botToken = clean;
+      this.cachedBotUsername = null;
+    }
+  }
+
+  public getBotToken(): string {
+    return this.botToken;
+  }
+
+  public hasBotToken(): boolean {
+    return Boolean(this.botToken);
   }
 
   public async callApi(method: string, body: Record<string, unknown>) {

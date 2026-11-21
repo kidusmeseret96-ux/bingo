@@ -17,7 +17,18 @@ import {
   type SeasonThemeId,
   type SpecialEvent,
   type SpecialEventThemeId,
+  type VoicePresetId,
+  normalizeVoicePreset,
 } from './shared/bingo.ts';
+
+export function maskBotToken(token: string | null | undefined): string {
+  const clean = typeof token === 'string' ? token.trim() : '';
+  if (!clean) return '';
+  if (clean.length >= 10) {
+    return `${clean.slice(0, 6)}...${clean.slice(-4)}`;
+  }
+  return 'configured';
+}
 
 export interface PaymentButtonRecord {
   id: string;
@@ -78,6 +89,8 @@ export interface BotAppConfig {
   customRecentWinners: RoundWinner[] | null;
   customLeaderboard: LeaderboardEntry[] | null;
   botPlayerNames: string[];
+  voicePreset: VoicePresetId;
+  botToken: string;
 }
 
 export interface BotSessionRecord {
@@ -300,6 +313,8 @@ class SupabaseStore {
     customRecentWinners: null,
     customLeaderboard: null,
     botPlayerNames: [],
+    voicePreset: 'classic_host',
+    botToken: '',
   };
 
   private memButtons: PaymentButtonRecord[] = buildDefaultPresetButtons();
@@ -575,6 +590,8 @@ class SupabaseStore {
         typeof s.bot_player_names === 'string'
           ? parseBotPlayerNames(s.bot_player_names)
           : [...this.memConfig.botPlayerNames],
+      voicePreset: normalizeVoicePreset(s.voice_preset ?? this.memConfig.voicePreset),
+      botToken: typeof s.bot_token === 'string' ? s.bot_token.trim() : this.memConfig.botToken,
     };
   }
 
@@ -861,6 +878,46 @@ class SupabaseStore {
 
   public getMemBotPlayerNames(): string[] {
     return [...this.memConfig.botPlayerNames];
+  }
+
+  public async updateVoicePreset(rawPreset: unknown): Promise<VoicePresetId> {
+    const preset = normalizeVoicePreset(rawPreset);
+    this.memConfig.voicePreset = preset;
+    this.invalidateBotCaches();
+    if (this.client) {
+      try {
+        await this.client
+          .from('app_settings')
+          .update({
+            voice_preset: preset,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', 1);
+      } catch (err) {
+        console.error('[Supabase] updateVoicePreset error:', err);
+      }
+    }
+    return preset;
+  }
+
+  public async updateBotToken(rawToken: string): Promise<string> {
+    const clean = (rawToken || '').trim();
+    this.memConfig.botToken = clean;
+    this.invalidateBotCaches();
+    if (this.client) {
+      try {
+        await this.client
+          .from('app_settings')
+          .update({
+            bot_token: clean,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', 1);
+      } catch (err) {
+        console.error('[Supabase] updateBotToken error:', err);
+      }
+    }
+    return clean;
   }
 
   public async upsertPlayer(
@@ -1741,6 +1798,8 @@ class SupabaseStore {
       onAdjustPlayerBalance: (playerId: string, depDelta: number, wonDelta: number) => void;
       onTogglePlayerBan: (playerId: string, isBanned: boolean) => void;
       onClearScope: (scope: string) => void;
+      getEffectiveBotToken?: () => string;
+      onBotTokenUpdated?: (token: string) => void;
     }
   ): Promise<{ data?: any; error?: string; status?: number }> {
     const providedPin = String(params?.p_pin ?? '');
@@ -1767,30 +1826,61 @@ class SupabaseStore {
     if (this.client) {
       try {
         let { data, error } = await this.client.rpc(fnName, params);
-        if (
-          error &&
-          fnName === 'admin_update_settings' &&
-          'p_bot_player_names' in params
-        ) {
-          const fallbackParams = { ...params };
-          delete fallbackParams.p_bot_player_names;
-          const retry = await this.client.rpc(fnName, fallbackParams);
-          if (!retry.error) {
-            data = retry.data;
-            error = null;
+        if (error && fnName === 'admin_update_settings') {
+          if ('p_voice_preset' in params || 'p_bot_player_names' in params) {
+            const noVoice = { ...params };
+            delete noVoice.p_voice_preset;
+            const retry1 = await this.client.rpc(fnName, noVoice);
+            if (!retry1.error) {
+              data = retry1.data;
+              error = null;
+            } else {
+              const legacyParams = { ...noVoice };
+              delete legacyParams.p_bot_player_names;
+              const retry2 = await this.client.rpc(fnName, legacyParams);
+              if (!retry2.error) {
+                data = retry2.data;
+                error = null;
+              }
+            }
           }
         }
         if (error) {
           return { error: error.message || 'Supabase RPC error.', status: 400 };
         }
         if (fnName === 'admin_get_dashboard' && data && typeof data === 'object' && data.settings) {
+          delete data.settings.bot_token;
           if (typeof data.settings.bot_player_names !== 'string') {
             data.settings.bot_player_names = this.memConfig.botPlayerNames.join('\n');
           }
+          if (typeof data.settings.voice_preset !== 'string') {
+            data.settings.voice_preset = this.memConfig.voicePreset;
+          }
+          const customConfigured = Boolean(this.memConfig.botToken || data.settings.bot_token_configured);
+          const effectiveToken = ctx.getEffectiveBotToken ? ctx.getEffectiveBotToken() : this.memConfig.botToken;
+          if (!customConfigured && effectiveToken) {
+            data.settings.bot_token_configured = true;
+            data.settings.bot_token_masked = maskBotToken(effectiveToken);
+            data.settings.bot_token_source = 'env';
+          } else {
+            data.settings.bot_token_configured = Boolean(customConfigured || effectiveToken);
+            data.settings.bot_token_masked =
+              data.settings.bot_token_masked || maskBotToken(this.memConfig.botToken || effectiveToken);
+            data.settings.bot_token_source = customConfigured ? 'custom' : effectiveToken ? 'env' : 'none';
+          }
         }
-        if (fnName === 'admin_update_settings' && typeof params.p_bot_player_names === 'string') {
-          await this.updateBotPlayerNames(params.p_bot_player_names);
+        if (fnName === 'admin_update_settings') {
+          if (typeof params.p_bot_player_names === 'string') {
+            await this.updateBotPlayerNames(params.p_bot_player_names);
+          }
+          if (typeof params.p_voice_preset === 'string') {
+            await this.updateVoicePreset(params.p_voice_preset);
+          }
           pushSync();
+        }
+        if (fnName === 'admin_update_bot_token' && typeof params.p_bot_token === 'string') {
+          const saved = await this.updateBotToken(params.p_bot_token);
+          ctx.onBotTokenUpdated?.(saved);
         }
         if (fnName !== 'admin_get_dashboard') {
           this.invalidateBotCaches();
@@ -1822,6 +1912,8 @@ class SupabaseStore {
           b.created_at.localeCompare(a.created_at)
         );
         const vouchers = Array.from(this.memVouchers.values());
+        const effectiveToken = ctx.getEffectiveBotToken ? ctx.getEffectiveBotToken() : this.memConfig.botToken;
+        const tokenSource = this.memConfig.botToken ? 'custom' : effectiveToken ? 'env' : 'none';
         const snapshot = {
           settings: {
             id: 1,
@@ -1842,6 +1934,10 @@ class SupabaseStore {
             referral_deposit_50_bonus: this.memConfig.referralDeposit50Bonus,
             referral_deposit_bonus: this.memConfig.referralDepositBonus,
             bot_player_names: this.memConfig.botPlayerNames.join('\n'),
+            voice_preset: this.memConfig.voicePreset,
+            bot_token_configured: Boolean(effectiveToken),
+            bot_token_masked: maskBotToken(effectiveToken),
+            bot_token_source: tokenSource,
             updated_at: now,
           },
           payment_buttons: this.memButtons.map((b) => ({ ...b, created_at: now })),
@@ -1928,11 +2024,31 @@ class SupabaseStore {
         if (typeof params.p_bot_player_names === 'string') {
           this.memConfig.botPlayerNames = parseBotPlayerNames(params.p_bot_player_names);
         }
+        if (typeof params.p_voice_preset === 'string') {
+          this.memConfig.voicePreset = normalizeVoicePreset(params.p_voice_preset);
+        }
         if (typeof params.p_new_pin === 'string' && params.p_new_pin.trim()) {
           this.memConfig.adminPin = params.p_new_pin.trim();
         }
         pushSync();
         return { data: true };
+      }
+
+      case 'admin_update_bot_token': {
+        const raw = typeof params.p_bot_token === 'string' ? params.p_bot_token.trim() : '';
+        if (raw && !/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(raw)) {
+          return { error: 'Invalid Telegram bot token format.', status: 400 };
+        }
+        this.memConfig.botToken = raw;
+        ctx.onBotTokenUpdated?.(raw);
+        const eff = ctx.getEffectiveBotToken ? ctx.getEffectiveBotToken() : raw;
+        return {
+          data: {
+            bot_token_configured: Boolean(eff),
+            bot_token_masked: maskBotToken(eff),
+            bot_token_source: raw ? 'custom' : eff ? 'env' : 'none',
+          },
+        };
       }
 
       case 'admin_update_bank_message': {

@@ -187,6 +187,10 @@ export interface DashboardSettings {
   referral_deposit_50_bonus?: number;
   referral_deposit_bonus?: number;
   bot_player_names?: string;
+  voice_preset?: string;
+  bot_token_configured?: boolean;
+  bot_token_masked?: string;
+  bot_token_source?: 'custom' | 'env' | 'none';
   updated_at: string;
 }
 
