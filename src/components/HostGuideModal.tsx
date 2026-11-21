@@ -106,7 +106,7 @@ export const HostGuideModal: React.FC<HostGuideModalProps> = ({ open, onClose, b
               02. Owner-Only Admin Access (Hidden from Players)
             </div>
             <p className="text-xs leading-relaxed">
-              Regular players never see any Admin button. Set <code className="font-mono font-bold">ADMIN_TELEGRAM_IDS</code> to your numeric Telegram user ID so your account unlocks Admin automatically, or append <code className="font-mono font-bold">?admin=1</code> to the URL (or tap the Zemen Bingo title 5 times) and enter <code className="font-mono font-bold">ADMIN_PIN</code>.
+              Regular players never see any Admin button. Set <code className="font-mono font-bold">ADMIN_TELEGRAM_IDS</code> to your numeric Telegram user ID so your account unlocks Admin automatically, or append <code className="font-mono font-bold">?admin=1</code> to the URL and enter <code className="font-mono font-bold">ADMIN_PIN</code>.
             </p>
           </section>
 

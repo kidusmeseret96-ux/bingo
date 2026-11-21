@@ -41,6 +41,7 @@ import {
   getLocalizedCallText,
 } from '../shared/bingo';
 import {
+  getWsAuthToken,
   initTelegramMiniApp,
   resolvePlayerIdentity,
   triggerHaptic,
@@ -177,7 +178,6 @@ export default function App() {
   const languageRef = useRef<AppLanguage>(language);
   const lastBeepSecRef = useRef<number | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const brandTapRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
 
   soundRef.current = soundEnabled;
   voiceRef.current = voiceEnabled;
@@ -228,6 +228,7 @@ export default function App() {
         const msg: ClientMessage = {
           type: 'auth',
           player: id,
+          token: getWsAuthToken(),
           autoClaim: autoClaimRef.current,
           language: languageRef.current,
         };
@@ -255,6 +256,7 @@ export default function App() {
             JSON.stringify({
               type: 'auth',
               player: playerRef.current,
+              token: getWsAuthToken(),
               autoClaim: autoClaimRef.current,
               language: languageRef.current,
             } satisfies ClientMessage)
@@ -503,19 +505,6 @@ export default function App() {
 
   const handleBrandClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    const now = Date.now();
-    if (now - brandTapRef.current.lastAt < 1200) {
-      brandTapRef.current.count += 1;
-    } else {
-      brandTapRef.current.count = 1;
-    }
-    brandTapRef.current.lastAt = now;
-
-    if (brandTapRef.current.count >= 5) {
-      brandTapRef.current.count = 0;
-      setShowAdminModal(true);
-      return;
-    }
     handleLeaveRoom();
   };
 
@@ -580,7 +569,7 @@ export default function App() {
 
   const displayedOnline = gameState?.onlineCount ?? lobby?.onlineCount ?? 1;
   const activeSettings = gameState?.settings || lobby?.settings;
-  const activeSeasonTheme = activeSettings?.seasonTheme ?? 'enkutatash';
+  const activeSeasonTheme = activeSettings?.seasonTheme ?? 'none';
   const activeMaxCartelas = Math.max(
     MIN_CARTELAS,
     Math.min(MAX_CARTELAS_LIMIT, Math.round(activeSettings?.maxCartelas || TOTAL_CARTELAS))
@@ -679,16 +668,16 @@ export default function App() {
 
       {/* Clean 3-Zone Top Bar */}
       <header className="sticky top-0 z-30 h-12 sm:h-14 bg-white/90 dark:bg-[#110526]/90 backdrop-blur-md border-b border-pink-200/80 dark:border-purple-500/30">
-        <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 flex items-center justify-between gap-2">
+        <div className="max-w-7xl mx-auto h-full px-2.5 sm:px-6 flex items-center justify-between gap-1.5 sm:gap-2 min-w-0">
           <a
             href="#top"
             onClick={handleBrandClick}
-            className="inline-flex items-center gap-1.5 font-display text-lg sm:text-xl font-extrabold tracking-tight whitespace-nowrap shrink-0 select-none"
+            className="inline-flex items-center gap-1.5 font-display text-base sm:text-xl font-extrabold tracking-tight min-w-0 select-none"
           >
-            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-yellow-300 text-purple-950 flex items-center justify-center shadow-sm shadow-amber-500/30">
+            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-yellow-300 text-purple-950 flex items-center justify-center shadow-sm shadow-amber-500/30 shrink-0">
               <Crown className="w-4 h-4" />
             </span>
-            <span className="bg-gradient-to-r from-pink-600 via-fuchsia-600 to-purple-700 dark:from-amber-300 dark:via-yellow-200 dark:to-fuchsia-400 bg-clip-text text-transparent">
+            <span className="truncate bg-gradient-to-r from-pink-600 via-fuchsia-600 to-purple-700 dark:from-amber-300 dark:via-yellow-200 dark:to-fuchsia-400 bg-clip-text text-transparent">
               {t.brandName}
             </span>
           </a>
@@ -727,15 +716,16 @@ export default function App() {
             )}
           </nav>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {isAdmin && (
               <button
                 type="button"
                 onClick={() => setShowAdminModal(true)}
-                className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl text-xs font-extrabold bg-gradient-to-r from-amber-400 to-yellow-300 text-purple-950 hover:brightness-105 transition-all whitespace-nowrap cursor-pointer"
+                aria-label={t.adminControls}
+                className="inline-flex items-center justify-center gap-1 px-2 sm:px-3 py-1.5 min-h-[36px] min-w-[36px] rounded-xl text-xs font-extrabold bg-gradient-to-r from-amber-400 to-yellow-300 text-purple-950 hover:brightness-105 transition-all whitespace-nowrap cursor-pointer"
               >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                {t.adminControls}
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">{t.adminControls}</span>
               </button>
             )}
 
@@ -743,9 +733,9 @@ export default function App() {
               type="button"
               onClick={() => setShowMissionsModal(true)}
               aria-label={t.missions}
-              className="relative inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl text-xs font-bold bg-gradient-to-r from-amber-400 to-yellow-300 text-purple-950 hover:brightness-105 transition-all whitespace-nowrap cursor-pointer shadow-xs"
+              className="relative inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 min-h-[36px] rounded-xl text-[11px] sm:text-xs font-bold bg-gradient-to-r from-amber-400 to-yellow-300 text-purple-950 hover:brightness-105 transition-all whitespace-nowrap cursor-pointer shadow-xs"
             >
-              <Target className="w-3.5 h-3.5" />
+              <Target className="w-3.5 h-3.5 shrink-0" />
               <span>{t.missions}</span>
               {readyMissionsCount > 0 && (
                 <span className="min-w-[16px] h-4 px-1 rounded-full bg-fuchsia-600 text-white font-mono text-[10px] font-extrabold flex items-center justify-center">
@@ -758,7 +748,7 @@ export default function App() {
               type="button"
               onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
               aria-label={theme === 'dark' ? t.lightMode : t.darkMode}
-              className="min-h-[36px] min-w-[36px] rounded-xl bg-pink-50 dark:bg-[#220B45] border border-pink-200 dark:border-purple-500/40 text-pink-700 dark:text-amber-300 flex items-center justify-center hover:border-pink-400 dark:hover:border-fuchsia-400 cursor-pointer"
+              className="min-h-[36px] min-w-[36px] shrink-0 rounded-xl bg-pink-50 dark:bg-[#220B45] border border-pink-200 dark:border-purple-500/40 text-pink-700 dark:text-amber-300 flex items-center justify-center hover:border-pink-400 dark:hover:border-fuchsia-400 cursor-pointer"
             >
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -767,10 +757,10 @@ export default function App() {
               type="button"
               onClick={() => setShowSettingsModal(true)}
               aria-label={t.settings}
-              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl text-xs font-semibold bg-gradient-to-r from-pink-500 via-fuchsia-600 to-purple-600 text-white hover:brightness-110 transition-all whitespace-nowrap cursor-pointer shadow-sm shadow-fuchsia-600/25"
+              className="inline-flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 min-h-[36px] min-w-[36px] shrink-0 rounded-xl text-xs font-semibold bg-gradient-to-r from-pink-500 via-fuchsia-600 to-purple-600 text-white hover:brightness-110 transition-all whitespace-nowrap cursor-pointer shadow-sm shadow-fuchsia-600/25"
             >
-              <Settings className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline sm:inline">{t.settings}</span>
+              <Settings className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">{t.settings}</span>
             </button>
           </div>
         </div>
@@ -1293,7 +1283,7 @@ export default function App() {
             commissionPercent: 20,
             callIntervalSeconds: 3.5,
             maxCartelas: TOTAL_CARTELAS,
-            seasonTheme: 'enkutatash',
+            seasonTheme: 'none',
             rankThresholds: DEFAULT_RANK_THRESHOLDS,
             missionCompletionBonus: 0,
             onlineCountOverride: null,

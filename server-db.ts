@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   DEFAULT_RANK_THRESHOLDS,
@@ -76,6 +77,7 @@ export interface BotAppConfig {
   referralDepositBonus: number;
   customRecentWinners: RoundWinner[] | null;
   customLeaderboard: LeaderboardEntry[] | null;
+  botPlayerNames: string[];
 }
 
 export interface BotSessionRecord {
@@ -185,6 +187,21 @@ export function parseGroupIdList(raw: string | null | undefined): string[] {
   return out;
 }
 
+export function parseBotPlayerNames(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[\n,;]+/)) {
+    const cleaned = part.trim().slice(0, 32);
+    const key = cleaned.toLowerCase();
+    if (cleaned && !seen.has(key)) {
+      seen.add(key);
+      out.push(cleaned);
+    }
+  }
+  return out;
+}
+
 function normalizeSeasonTheme(raw: unknown): SeasonThemeId {
   if (raw === 'christmas' || raw === 'enkutatash' || raw === 'golden' || raw === 'cyber') {
     return raw;
@@ -273,7 +290,7 @@ class SupabaseStore {
     callIntervalMs: Math.max(1500, Math.round((Number(process.env.CALL_INTERVAL_SECONDS) || 3.5) * 1000)),
     maxCartelas: TOTAL_CARTELAS,
     vouchersEnabled: false,
-    seasonTheme: 'enkutatash',
+    seasonTheme: 'none',
     rankThresholds: { ...DEFAULT_RANK_THRESHOLDS },
     missionCompletionBonus: 50,
     adminPin: (process.env.ADMIN_PIN || '1234').trim(),
@@ -282,6 +299,7 @@ class SupabaseStore {
     referralDepositBonus: 20,
     customRecentWinners: null,
     customLeaderboard: null,
+    botPlayerNames: [],
   };
 
   private memButtons: PaymentButtonRecord[] = buildDefaultPresetButtons();
@@ -419,6 +437,7 @@ class SupabaseStore {
           extraGroupIds: [...this.memConfig.extraGroupIds],
           extraAdminIds: [...this.memConfig.extraAdminIds],
           rankThresholds: { ...this.memConfig.rankThresholds },
+          botPlayerNames: [...this.memConfig.botPlayerNames],
         },
         players: [],
         recentRounds: [],
@@ -460,7 +479,7 @@ class SupabaseStore {
           id,
           name: String(p.name || 'Player'),
           username: p.username ? String(p.username) : null,
-          language: p.language === 'am' || p.language === 'om' ? p.language : 'en',
+          language: p.language === 'en' || p.language === 'om' ? p.language : 'am',
           deposited_birr: Number(p.deposited_birr) || 0,
           won_birr: Number(p.won_birr) || 0,
           total_deposited_birr: totalDep,
@@ -490,6 +509,7 @@ class SupabaseStore {
           extraGroupIds: [...this.memConfig.extraGroupIds],
           extraAdminIds: [...this.memConfig.extraAdminIds],
           rankThresholds: { ...this.memConfig.rankThresholds },
+          botPlayerNames: [...this.memConfig.botPlayerNames],
         },
         players,
         recentRounds,
@@ -504,6 +524,7 @@ class SupabaseStore {
           extraGroupIds: [...this.memConfig.extraGroupIds],
           extraAdminIds: [...this.memConfig.extraAdminIds],
           rankThresholds: { ...this.memConfig.rankThresholds },
+          botPlayerNames: [...this.memConfig.botPlayerNames],
         },
         players: [],
         recentRounds: [],
@@ -550,6 +571,10 @@ class SupabaseStore {
       customLeaderboard: Array.isArray(s.custom_leaderboard)
         ? (s.custom_leaderboard as LeaderboardEntry[])
         : null,
+      botPlayerNames:
+        typeof s.bot_player_names === 'string'
+          ? parseBotPlayerNames(s.bot_player_names)
+          : [...this.memConfig.botPlayerNames],
     };
   }
 
@@ -583,6 +608,7 @@ class SupabaseStore {
           extraGroupIds: [...this.memConfig.extraGroupIds],
           extraAdminIds: [...this.memConfig.extraAdminIds],
           rankThresholds: { ...this.memConfig.rankThresholds },
+          botPlayerNames: [...this.memConfig.botPlayerNames],
         },
         specialEvents,
         dailyMissions,
@@ -711,7 +737,7 @@ class SupabaseStore {
       const mapped: BotTextTemplateRecord[] = data.map((t) => ({
         id: String(t.id),
         template_key: String(t.template_key),
-        language: t.language === 'am' || t.language === 'om' ? t.language : 'en',
+        language: t.language === 'en' || t.language === 'om' ? t.language : 'am',
         title: String(t.title || t.template_key),
         message_text: String(t.message_text || ''),
         buttons_config: Array.isArray(t.buttons_config)
@@ -811,6 +837,30 @@ class SupabaseStore {
     } catch (err) {
       console.error('[Supabase] updateCustomWinnersAndLeaderboard error:', err);
     }
+  }
+
+  public async updateBotPlayerNames(rawNames: string): Promise<string[]> {
+    const parsed = parseBotPlayerNames(rawNames);
+    this.memConfig.botPlayerNames = parsed;
+    this.invalidateBotCaches();
+    if (this.client) {
+      try {
+        await this.client
+          .from('app_settings')
+          .update({
+            bot_player_names: parsed.join('\n'),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', 1);
+      } catch (err) {
+        console.error('[Supabase] updateBotPlayerNames error:', err);
+      }
+    }
+    return parsed;
+  }
+
+  public getMemBotPlayerNames(): string[] {
+    return [...this.memConfig.botPlayerNames];
   }
 
   public async upsertPlayer(
@@ -916,7 +966,7 @@ class SupabaseStore {
             exists: true,
             name: String(data.name || 'Player'),
             username: data.username ? String(data.username) : null,
-            language: data.language === 'am' || data.language === 'om' ? data.language : 'en',
+            language: data.language === 'en' || data.language === 'om' ? data.language : 'am',
             contactShared: Boolean(data.contact_shared),
             isBanned: Boolean(data.is_banned),
             totalDeposited: totalDep,
@@ -964,7 +1014,7 @@ class SupabaseStore {
           id,
           name: String(p.name || 'Player'),
           username: p.username ? String(p.username) : null,
-          language: p.language === 'am' || p.language === 'om' ? p.language : 'en',
+          language: p.language === 'en' || p.language === 'om' ? p.language : 'am',
           deposited_birr: Number(p.deposited_birr) || 0,
           won_birr: Number(p.won_birr) || 0,
           total_deposited_birr: Number(p.total_deposited_birr) || 0,
@@ -1035,7 +1085,7 @@ class SupabaseStore {
   public async getBotSession(tgUserId: string): Promise<BotSessionRecord> {
     const fallback = this.memSessions.get(tgUserId) || {
       telegram_user_id: tgUserId,
-      language: 'en' as AppLanguage,
+      language: 'am' as AppLanguage,
       pending_action: null,
       selected_button_id: null,
       selected_button_label: null,
@@ -1052,7 +1102,7 @@ class SupabaseStore {
       if (!data) return fallback;
       const rec: BotSessionRecord = {
         telegram_user_id: tgUserId,
-        language: data.language === 'am' || data.language === 'om' ? data.language : 'en',
+        language: data.language === 'en' || data.language === 'om' ? data.language : 'am',
         pending_action:
           data.pending_action === 'awaiting_deposit_voucher' ||
           data.pending_action === 'awaiting_deposit_proof' ||
@@ -1694,26 +1744,6 @@ class SupabaseStore {
     }
   ): Promise<{ data?: any; error?: string; status?: number }> {
     const providedPin = String(params?.p_pin ?? '');
-    if (this.client) {
-      try {
-        const { data, error } = await this.client.rpc(fnName, params);
-        if (error) {
-          return { error: error.message || 'Supabase RPC error.', status: 400 };
-        }
-        if (fnName !== 'admin_get_dashboard') {
-          this.invalidateBotCaches();
-        }
-        return { data: data ?? true };
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : 'Supabase RPC request failed.', status: 500 };
-      }
-    }
-
-    if (providedPin !== ctx.expectedPin && providedPin !== this.memConfig.adminPin) {
-      return { error: 'Invalid Admin PIN.', status: 401 };
-    }
-
-    const now = new Date().toISOString();
     const pushSync = () => {
       const nowMs = Date.now();
       ctx.onSyncFromMem({
@@ -1722,6 +1752,7 @@ class SupabaseStore {
           extraGroupIds: [...this.memConfig.extraGroupIds],
           extraAdminIds: [...this.memConfig.extraAdminIds],
           rankThresholds: { ...this.memConfig.rankThresholds },
+          botPlayerNames: [...this.memConfig.botPlayerNames],
         },
         specialEvents: this.memSpecialEvents
           .filter((e) => e.is_active && (!e.ends_at || new Date(e.ends_at).getTime() > nowMs))
@@ -1732,6 +1763,54 @@ class SupabaseStore {
           .map((r) => this.mapMissionRow(r)),
       });
     };
+
+    if (this.client) {
+      try {
+        let { data, error } = await this.client.rpc(fnName, params);
+        if (
+          error &&
+          fnName === 'admin_update_settings' &&
+          'p_bot_player_names' in params
+        ) {
+          const fallbackParams = { ...params };
+          delete fallbackParams.p_bot_player_names;
+          const retry = await this.client.rpc(fnName, fallbackParams);
+          if (!retry.error) {
+            data = retry.data;
+            error = null;
+          }
+        }
+        if (error) {
+          return { error: error.message || 'Supabase RPC error.', status: 400 };
+        }
+        if (fnName === 'admin_get_dashboard' && data && typeof data === 'object' && data.settings) {
+          if (typeof data.settings.bot_player_names !== 'string') {
+            data.settings.bot_player_names = this.memConfig.botPlayerNames.join('\n');
+          }
+        }
+        if (fnName === 'admin_update_settings' && typeof params.p_bot_player_names === 'string') {
+          await this.updateBotPlayerNames(params.p_bot_player_names);
+          pushSync();
+        }
+        if (fnName !== 'admin_get_dashboard') {
+          this.invalidateBotCaches();
+        }
+        return { data: data ?? true };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : 'Supabase RPC request failed.', status: 500 };
+      }
+    }
+
+    const eqDigest = (a: string, b: string) =>
+      crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(a).digest(),
+        crypto.createHash('sha256').update(b).digest()
+      );
+    if (!eqDigest(providedPin, ctx.expectedPin) && !eqDigest(providedPin, this.memConfig.adminPin)) {
+      return { error: 'Invalid Admin PIN.', status: 401 };
+    }
+
+    const now = new Date().toISOString();
 
     switch (fnName) {
       case 'admin_get_dashboard': {
@@ -1762,6 +1841,7 @@ class SupabaseStore {
             referral_signup_bonus: this.memConfig.referralSignupBonus,
             referral_deposit_50_bonus: this.memConfig.referralDeposit50Bonus,
             referral_deposit_bonus: this.memConfig.referralDepositBonus,
+            bot_player_names: this.memConfig.botPlayerNames.join('\n'),
             updated_at: now,
           },
           payment_buttons: this.memButtons.map((b) => ({ ...b, created_at: now })),
@@ -1845,6 +1925,9 @@ class SupabaseStore {
         if (typeof params.p_season_theme === 'string') {
           this.memConfig.seasonTheme = normalizeSeasonTheme(params.p_season_theme);
         }
+        if (typeof params.p_bot_player_names === 'string') {
+          this.memConfig.botPlayerNames = parseBotPlayerNames(params.p_bot_player_names);
+        }
         if (typeof params.p_new_pin === 'string' && params.p_new_pin.trim()) {
           this.memConfig.adminPin = params.p_new_pin.trim();
         }
@@ -1919,7 +2002,7 @@ class SupabaseStore {
           .replace(/[^a-z0-9_]+/g, '_');
         if (!key) return { error: 'Template key required.', status: 400 };
         const lang: AppLanguage =
-          params.p_language === 'am' || params.p_language === 'om' ? params.p_language : 'en';
+          params.p_language === 'en' || params.p_language === 'om' ? params.p_language : 'am';
         const buttons = Array.isArray(params.p_buttons_config) ? params.p_buttons_config : [];
         const existing = this.memTemplates.find((t) => t.template_key === key && t.language === lang);
         if (existing) {

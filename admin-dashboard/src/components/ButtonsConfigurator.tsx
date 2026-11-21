@@ -16,6 +16,7 @@ interface Props {
     max_cartelas: number;
     vouchers_enabled: boolean;
     season_theme: string;
+    bot_player_names: string;
     new_pin?: string;
   }) => Promise<void>;
   onSaveBankMessage: (
@@ -62,6 +63,7 @@ export const ButtonsConfigurator: React.FC<Props> = ({
   const [maxCartelas, setMaxCartelas] = useState(String(settings.max_cartelas ?? 400));
   const [vouchersEnabled, setVouchersEnabled] = useState(Boolean(settings.vouchers_enabled));
   const [seasonTheme, setSeasonTheme] = useState(settings.season_theme || 'none');
+  const [botPlayerNames, setBotPlayerNames] = useState(settings.bot_player_names || '');
   const [newPin, setNewPin] = useState('');
 
   useEffect(() => {
@@ -74,6 +76,7 @@ export const ButtonsConfigurator: React.FC<Props> = ({
     setMaxCartelas(String(settings.max_cartelas ?? 400));
     setVouchersEnabled(Boolean(settings.vouchers_enabled));
     setSeasonTheme(settings.season_theme || 'none');
+    setBotPlayerNames(settings.bot_player_names || '');
   }, [
     settings.admin_group_id,
     settings.extra_group_ids,
@@ -84,6 +87,7 @@ export const ButtonsConfigurator: React.FC<Props> = ({
     settings.max_cartelas,
     settings.vouchers_enabled,
     settings.season_theme,
+    settings.bot_player_names,
   ]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -289,6 +293,7 @@ export const ButtonsConfigurator: React.FC<Props> = ({
                 max_cartelas: parsedCartelas,
                 vouchers_enabled: vouchersEnabled,
                 season_theme: seasonTheme,
+                bot_player_names: botPlayerNames.trim(),
                 new_pin: newPin.trim() || undefined,
               })
             }
@@ -355,6 +360,33 @@ export const ButtonsConfigurator: React.FC<Props> = ({
             />
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               Added users unlock the in-game Admin Panel and admin bot moderation commands.
+            </p>
+          </div>
+
+          <div className="lg:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Bot Player Names for Added Online Players (one per line or comma separated)
+              </label>
+              <span className="text-[11px] font-mono tabular-nums text-blue-700 dark:text-cyan-300 font-semibold">
+                {
+                  botPlayerNames
+                    .split(/[\n,;]+/)
+                    .map((n) => n.trim())
+                    .filter(Boolean).length
+                }{' '}
+                name(s) configured
+              </span>
+            </div>
+            <textarea
+              rows={3}
+              value={botPlayerNames}
+              onChange={(e) => setBotPlayerNames(e.target.value)}
+              placeholder={'Abebe Bikila\nTigist Lemma\nDawit Tesfaye\nSelamawit Girma\nMekdes Tadesse'}
+              className="w-full px-3 py-2 text-sm bg-blue-50/60 dark:bg-[#070E20] border border-blue-200 dark:border-blue-500/25 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              When added online players take random cartelas in a stake room, each cartela gets a random name from this list and competes to win. If one wins, that name is shown on the winning screen and Winners leaderboard.
             </p>
           </div>
 

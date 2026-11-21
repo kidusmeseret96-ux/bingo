@@ -186,6 +186,7 @@ export interface DashboardSettings {
   referral_signup_bonus?: number;
   referral_deposit_50_bonus?: number;
   referral_deposit_bonus?: number;
+  bot_player_names?: string;
   updated_at: string;
 }
 

@@ -65,6 +65,9 @@ const BOT_STRINGS: Record<
     cancelled: string;
     noButtonsConfigured: string;
     depositFallbackReply: (bankName: string) => string;
+    depositIntro: string;
+    withdrawIntro: string;
+    withdrawPrompt: string;
     depositReceived: string;
     withdrawReceived: string;
     depositAcceptedUser: (amt: number, bankName: string) => string;
@@ -124,6 +127,9 @@ const BOT_STRINGS: Record<
     noButtonsConfigured: 'No banks are currently enabled. Please contact the admin.',
     depositFallbackReply: (bankName) =>
       `Selected ${bankName}. Send your deposit receipt photo or confirmation message here.`,
+    depositIntro: 'Choose a bank or wallet below to deposit:',
+    withdrawIntro: 'Choose your withdrawal bank or wallet below:',
+    withdrawPrompt: 'Send your full name, account number, and the Birr amount you want to withdraw:',
     depositReceived: 'Your deposit proof has been sent to the admin team. You will be notified once reviewed.',
     withdrawReceived: 'Your withdrawal request has been sent to the admin team.',
     depositAcceptedUser: (amt, bankName) =>
@@ -179,6 +185,9 @@ const BOT_STRINGS: Record<
     noButtonsConfigured: 'ምንም የባንክ አማራጭ አልተከፈተም። እባክዎ አስተዳዳሪውን ያግኙ።',
     depositFallbackReply: (bankName) =>
       `${bankName} ተመርጧል። የክፍያ ደረሰኝ ፎቶ ወይም መልእክት እዚህ ይላኩ።`,
+    depositIntro: 'ገንዘብ ለማስገባት ከታች ያለውን ባንክ ወይም ዋሌት ይምረጡ:',
+    withdrawIntro: 'ገንዘብ ለማውጣት ከታች ያለውን ባንክ ወይም ዋሌት ይምረጡ:',
+    withdrawPrompt: 'ሙሉ ስምዎን፣ የባንክ አካውንት ቁጥርዎን እና ማውጣት የሚፈልጉትን የብር መጠን ይላኩ:',
     depositReceived: 'የገንዘብ ማስገቢያ መረጃዎ ለአስተዳዳሪዎች ተልኳል። ሲረጋገጥ መልእክት ይደርስዎታል።',
     withdrawReceived: 'የገንዘብ ማውጫ ጥያቄዎ ለአስተዳዳሪዎች ተልኳል።',
     depositAcceptedUser: (amt, bankName) =>
@@ -234,6 +243,9 @@ const BOT_STRINGS: Record<
     noButtonsConfigured: 'Baankiin baname hin jiru. Maaloo bulchaa qunnamaa.',
     depositFallbackReply: (bankName) =>
       `${bankName} filatameera. Suuraa nagahee ykn ergaa mirkaneessaa asitti ergi.`,
+    depositIntro: 'Maallaqa galchuuf baankii ykn waaleetii armaan gadii filadhaa:',
+    withdrawIntro: 'Maallaqa baasuuf baankii ykn waaleetii armaan gadii filadhaa:',
+    withdrawPrompt: 'Maqaa guutuu keessan, lakkoofsa herrega baankii fi hanga Birrii baasuu barbaaddan ergaa:',
     depositReceived: 'Ragaan galchii keessanii gara bulchitootaatti ergameera. Yeroo mirkanaa’u isin beeksisna.',
     withdrawReceived: 'Gaaffiin baasii keessanii gara bulchitootaatti ergameera.',
     depositAcceptedUser: (amt, bankName) =>
@@ -425,11 +437,17 @@ export class TelegramBotHandler {
     key: string,
     lang: AppLanguage
   ): BotTextTemplateRecord | undefined {
-    return (
-      templates.find((t) => t.template_key === key && t.language === lang) ||
-      templates.find((t) => t.template_key === key && t.language === 'en') ||
-      templates.find((t) => t.template_key === key)
-    );
+    const exact = templates.find((t) => t.template_key === key && t.language === lang);
+    if (exact) return exact;
+    const anyCustom = templates.find((t) => t.template_key === key && t.is_custom);
+    if (anyCustom) {
+      return (
+        templates.find((t) => t.template_key === key && t.language === 'am') ||
+        templates.find((t) => t.template_key === key && t.language === 'en') ||
+        anyCustom
+      );
+    }
+    return undefined;
   }
 
   private buildInlineButtonsFromConfig(
@@ -716,7 +734,13 @@ export class TelegramBotHandler {
     }
 
     const tpl = this.findTemplate(templates, 'deposit_intro', lang);
-    const introMsg = tpl?.message_text?.trim() || config.depositIntroText;
+    const defaultEnDepositIntro = 'Choose a bank or wallet below to deposit:';
+    const configuredIntro = config.depositIntroText?.trim();
+    const introMsg =
+      tpl?.message_text?.trim() ||
+      (configuredIntro && (lang === 'en' || configuredIntro !== defaultEnDepositIntro)
+        ? configuredIntro
+        : t.depositIntro);
 
     const rows: Array<Array<Record<string, unknown>>> = chunkButtons(
       depButtons.map((b) => ({
@@ -778,7 +802,13 @@ export class TelegramBotHandler {
     }
 
     const tpl = this.findTemplate(templates, 'withdraw_intro', lang);
-    const introMsg = tpl?.message_text?.trim() || config.withdrawIntroText;
+    const defaultEnWithdrawIntro = 'Choose your withdrawal bank or wallet below:';
+    const configuredIntro = config.withdrawIntroText?.trim();
+    const introMsg =
+      tpl?.message_text?.trim() ||
+      (configuredIntro && (lang === 'en' || configuredIntro !== defaultEnWithdrawIntro)
+        ? configuredIntro
+        : t.withdrawIntro);
 
     const rows: Array<Array<Record<string, unknown>>> = chunkButtons(
       wdButtons.map((b) => ({
@@ -1020,7 +1050,7 @@ export class TelegramBotHandler {
       });
 
       const playerSession = await supabaseStore.getBotSession(playerRawId);
-      const playerLang = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'en';
+      const playerLang = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'am';
       const templates = await supabaseStore.getBotTemplates();
       const tpl = this.findTemplate(templates, 'deposit_accepted', playerLang);
       const localizedBank = getLocalizedBankName(
@@ -1063,7 +1093,7 @@ export class TelegramBotHandler {
             await this.hub.creditDepositFromBot(referral.referrer_id, referral.referrer_name, depositBonus, false);
             const referrerRawId = referral.referrer_id.replace(/^tg_/, '');
             const refSession = await supabaseStore.getBotSession(referrerRawId);
-            const refLang = this.hub.getPlayerLanguage(referral.referrer_id) || refSession.language || 'en';
+            const refLang = this.hub.getPlayerLanguage(referral.referrer_id) || refSession.language || 'am';
             await this.callApi('sendMessage', {
               chat_id: referrerRawId,
               text: BOT_STRINGS[refLang].referralDepositNotify(tx.player_name, roundedAmt, depositBonus, 100),
@@ -1085,7 +1115,7 @@ export class TelegramBotHandler {
             await this.hub.creditDepositFromBot(referral.referrer_id, referral.referrer_name, deposit50Bonus, false);
             const referrerRawId = referral.referrer_id.replace(/^tg_/, '');
             const refSession = await supabaseStore.getBotSession(referrerRawId);
-            const refLang = this.hub.getPlayerLanguage(referral.referrer_id) || refSession.language || 'en';
+            const refLang = this.hub.getPlayerLanguage(referral.referrer_id) || refSession.language || 'am';
             await this.callApi('sendMessage', {
               chat_id: referrerRawId,
               text: BOT_STRINGS[refLang].referralDepositNotify(tx.player_name, roundedAmt, deposit50Bonus, 50),
@@ -1128,7 +1158,7 @@ export class TelegramBotHandler {
         supabaseStore.getBotSession(playerRawId),
         supabaseStore.getBotTemplates(),
       ]);
-      const playerLang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'en';
+      const playerLang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'am';
       const localizedBank = tx.bank_key
         ? getLocalizedBankName(tx.bank_key as PresetBankKey, playerLang, bankLabel)
         : bankLabel;
@@ -1193,7 +1223,7 @@ export class TelegramBotHandler {
     this.hub.recordInviteMission?.(referrerFullId);
 
     const refSession = await supabaseStore.getBotSession(referrerTgId);
-    const refLang = this.hub.getPlayerLanguage(referrerFullId) || refSession.language || 'en';
+    const refLang = this.hub.getPlayerLanguage(referrerFullId) || refSession.language || 'am';
     await this.callApi('sendMessage', {
       chat_id: referrerTgId,
       text: BOT_STRINGS[refLang].referralJoinedNotify(fullName, signupBonus, deposit50Bonus, depositBonus),
@@ -1335,7 +1365,7 @@ export class TelegramBotHandler {
       supabaseStore.getBotSession(tgUserId),
     ]);
     const wasAlreadyPlayer = this.hub.hasPlayer(playerFullId) || playerInfo.exists;
-    const lang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || session.language || 'en';
+    const lang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || session.language || 'am';
     const t = BOT_STRINGS[lang];
 
     if (this.hub.isPlayerBanned(playerFullId) || playerInfo.isBanned) {
@@ -1672,7 +1702,7 @@ export class TelegramBotHandler {
         supabaseStore.getBotSession(playerRawId),
         supabaseStore.getBotTemplates(),
       ]);
-      const playerLang = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'en';
+      const playerLang = this.hub.getPlayerLanguage(playerFullId) || playerSession.language || 'am';
       const pt = BOT_STRINGS[playerLang];
 
       const promptChatId = chatType === 'channel' ? tgUserId : chatId;
@@ -1801,7 +1831,7 @@ export class TelegramBotHandler {
       supabaseStore.getBotSession(tgUserId),
       supabaseStore.getPlayerInfo(playerFullId),
     ]);
-    const lang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || session.language || 'en';
+    const lang: AppLanguage = this.hub.getPlayerLanguage(playerFullId) || session.language || 'am';
     const t = BOT_STRINGS[lang];
 
     if (this.hub.isPlayerBanned(playerFullId) || playerInfo.isBanned) {
@@ -1947,7 +1977,15 @@ export class TelegramBotHandler {
       await supabaseStore.saveBotSession(session);
 
       const wdPromptTpl = this.findTemplate(templates, 'withdraw_prompt', lang);
-      const rawReply = btn.response_text.trim() || wdPromptTpl?.message_text?.trim() || config.withdrawPromptText;
+      const defaultEnWithdrawPrompt =
+        'Send your full name, account number, and the Birr amount you want to withdraw:';
+      const configuredPrompt = config.withdrawPromptText?.trim();
+      const rawReply =
+        btn.response_text.trim() ||
+        wdPromptTpl?.message_text?.trim() ||
+        (configuredPrompt && (lang === 'en' || configuredPrompt !== defaultEnWithdrawPrompt)
+          ? configuredPrompt
+          : t.withdrawPrompt);
       const formatted = formatMessageWithCopyable(rawReply, btn.copyable_text);
       await this.callApi('sendMessage', {
         chat_id: chatId,

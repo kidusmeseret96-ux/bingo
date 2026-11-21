@@ -58,6 +58,13 @@ export function triggerHaptic(kind: 'light' | 'medium' | 'heavy' | 'success' | '
 const STORAGE_ID_KEY = 'cartela_guest_id';
 const STORAGE_NAME_KEY = 'cartela_guest_name';
 
+// Held strictly in memory (never localStorage/sessionStorage) for WebSocket authentication
+let inMemoryWsToken: string | undefined;
+
+export function getWsAuthToken(): string | undefined {
+  return inMemoryWsToken;
+}
+
 export function getSavedGuestName(): string {
   try {
     return localStorage.getItem(STORAGE_NAME_KEY) || '';
@@ -76,6 +83,7 @@ export function saveGuestName(name: string) {
 
 export async function resolvePlayerIdentity(): Promise<PlayerIdentity> {
   const tg = getTg();
+  inMemoryWsToken = undefined;
 
   if (tg?.initData) {
     try {
@@ -85,8 +93,9 @@ export async function resolvePlayerIdentity(): Promise<PlayerIdentity> {
         body: JSON.stringify({ initData: tg.initData }),
       });
       if (res.ok) {
-        const data = (await res.json()) as { verified: boolean; player?: PlayerIdentity };
+        const data = (await res.json()) as { verified: boolean; player?: PlayerIdentity; wsToken?: string };
         if (data.verified && data.player) {
+          inMemoryWsToken = typeof data.wsToken === 'string' && data.wsToken ? data.wsToken : undefined;
           return data.player;
         }
       }

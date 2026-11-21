@@ -20,7 +20,7 @@ create table if not exists public.app_settings (
   call_interval_ms int not null default 3500,
   max_cartelas int not null default 400,
   vouchers_enabled boolean not null default false,
-  season_theme text not null default 'enkutatash',
+  season_theme text not null default 'none',
   rank_thresholds jsonb not null default '{"bronze":0,"silver":500,"gold":2000,"diamond":5000,"platinum":15000}'::jsonb,
   mission_completion_bonus numeric not null default 50,
   referral_signup_bonus numeric not null default 20,
@@ -28,6 +28,7 @@ create table if not exists public.app_settings (
   referral_deposit_bonus numeric not null default 20,
   custom_recent_winners jsonb,
   custom_leaderboard jsonb,
+  bot_player_names text not null default '',
   updated_at timestamptz not null default now()
 );
 
@@ -35,7 +36,7 @@ alter table public.app_settings add column if not exists extra_group_ids text no
 alter table public.app_settings add column if not exists extra_admin_ids text not null default '';
 alter table public.app_settings add column if not exists max_cartelas int not null default 400;
 alter table public.app_settings add column if not exists vouchers_enabled boolean not null default false;
-alter table public.app_settings add column if not exists season_theme text not null default 'enkutatash';
+alter table public.app_settings add column if not exists season_theme text not null default 'none';
 alter table public.app_settings add column if not exists rank_thresholds jsonb not null default '{"bronze":0,"silver":500,"gold":2000,"diamond":5000,"platinum":15000}'::jsonb;
 alter table public.app_settings add column if not exists mission_completion_bonus numeric not null default 50;
 alter table public.app_settings add column if not exists referral_signup_bonus numeric not null default 20;
@@ -43,6 +44,7 @@ alter table public.app_settings add column if not exists referral_deposit_50_bon
 alter table public.app_settings add column if not exists referral_deposit_bonus numeric not null default 20;
 alter table public.app_settings add column if not exists custom_recent_winners jsonb;
 alter table public.app_settings add column if not exists custom_leaderboard jsonb;
+alter table public.app_settings add column if not exists bot_player_names text not null default '';
 
 insert into public.app_settings (id)
 values (1)
@@ -70,7 +72,7 @@ alter table public.vouchers enable row level security;
 create table if not exists public.bot_text_templates (
   id uuid primary key default gen_random_uuid(),
   template_key text not null,
-  language text not null default 'en' check (language in ('en', 'am', 'om')),
+  language text not null default 'am' check (language in ('en', 'am', 'om')),
   title text not null default '',
   message_text text not null default '',
   buttons_config jsonb not null default '[]'::jsonb,
@@ -135,7 +137,7 @@ create table if not exists public.players (
   id text primary key,
   name text not null,
   username text,
-  language text not null default 'en' check (language in ('en', 'am', 'om')),
+  language text not null default 'am' check (language in ('en', 'am', 'om')),
   deposited_birr numeric not null default 100,
   won_birr numeric not null default 0,
   total_deposited_birr numeric not null default 0,
@@ -257,7 +259,7 @@ create index if not exists idx_transactions_created_at on public.transactions (c
 -- ============================================================================
 create table if not exists public.bot_sessions (
   telegram_user_id text primary key,
-  language text not null default 'en' check (language in ('en', 'am', 'om')),
+  language text not null default 'am' check (language in ('en', 'am', 'om')),
   pending_action text,
   selected_button_id uuid,
   selected_button_label text,
@@ -468,6 +470,7 @@ $$;
 -- ============================================================================
 -- RPC 2: Update Bot Messages, Admin Groups, Max Cartelas, Vouchers, Season, Admins
 -- ============================================================================
+drop function if exists public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text);
 create or replace function public.admin_update_settings(
   p_pin text,
   p_admin_group_id text,
@@ -479,7 +482,8 @@ create or replace function public.admin_update_settings(
   p_extra_admin_ids text default null,
   p_max_cartelas int default null,
   p_vouchers_enabled boolean default null,
-  p_season_theme text default null
+  p_season_theme text default null,
+  p_bot_player_names text default null
 )
 returns jsonb
 language plpgsql
@@ -502,6 +506,7 @@ begin
     max_cartelas = case when p_max_cartelas is not null then greatest(100, least(600, p_max_cartelas)) else max_cartelas end,
     vouchers_enabled = case when p_vouchers_enabled is not null then p_vouchers_enabled else vouchers_enabled end,
     season_theme = case when p_season_theme is not null then trim(p_season_theme) else season_theme end,
+    bot_player_names = case when p_bot_player_names is not null then trim(p_bot_player_names) else bot_player_names end,
     admin_pin = case when p_new_pin is not null and trim(p_new_pin) <> '' then trim(p_new_pin) else admin_pin end,
     updated_at = now()
   where id = 1
@@ -742,7 +747,7 @@ begin
   insert into public.bot_text_templates (template_key, language, title, message_text, buttons_config, is_custom, updated_at)
   values (
     v_key,
-    coalesce(p_language, 'en'),
+    coalesce(p_language, 'am'),
     coalesce(trim(p_title), v_key),
     coalesce(p_message_text, ''),
     coalesce(p_buttons_config, '[]'::jsonb),
@@ -1037,7 +1042,7 @@ where not exists (select 1 from public.daily_missions);
 
 -- Permissions for Supabase Anon/Authenticated RPC callers
 grant execute on function public.admin_get_dashboard(text) to anon, authenticated;
-grant execute on function public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text) to anon, authenticated;
+grant execute on function public.admin_update_settings(text, text, text, text, text, text, text, text, int, boolean, text, text) to anon, authenticated;
 grant execute on function public.admin_update_referral_settings(text, numeric, numeric, numeric) to anon, authenticated;
 grant execute on function public.admin_update_bank_message(text, uuid, text, boolean, text) to anon, authenticated;
 grant execute on function public.admin_adjust_player_balance(text, text, numeric, numeric) to anon, authenticated;

@@ -539,7 +539,7 @@ export interface LobbySnapshot {
 }
 
 export type ClientMessage =
-  | { type: 'auth'; player: PlayerIdentity; autoClaim?: boolean; language?: AppLanguage }
+  | { type: 'auth'; player: PlayerIdentity; token?: string; autoClaim?: boolean; language?: AppLanguage }
   | { type: 'set_language'; language: AppLanguage }
   | { type: 'join_room'; stakeBirr: number }
   | { type: 'join_special_event'; eventId: string }

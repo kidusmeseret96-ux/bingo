@@ -61,6 +61,77 @@ const ADMIN_TG_IDS = new Set(
     .map((s) => (s.startsWith('tg_') ? s : `tg_${s}`))
 );
 
+const WS_AUTH_SECRET = (process.env.WS_AUTH_SECRET || BOT_TOKEN || crypto.randomBytes(32).toString('hex')).trim();
+const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_INITDATA_MAX_AGE_SEC = 24 * 60 * 60;
+
+const DEFAULT_BOT_PLAYER_NAMES = [
+  'Abebe',
+  'Tigist',
+  'Dawit',
+  'Selamawit',
+  'Mekdes',
+  'Yonas',
+  'Hanna',
+  'Bereket',
+  'Meron',
+  'Nahom',
+  'Eyerusalem',
+  'Samuel',
+];
+
+function isBotPlayerId(playerId: string): boolean {
+  return playerId === 'house_reserved' || playerId.startsWith('bot_');
+}
+
+function safeEqualText(a: string, b: string): boolean {
+  const d1 = crypto.createHash('sha256').update(a).digest();
+  const d2 = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(d1, d2);
+}
+
+function signWsToken(player: PlayerIdentity): string {
+  const payload = {
+    player: {
+      id: player.id,
+      name: player.name,
+      username: player.username,
+      isTelegram: Boolean(player.isTelegram),
+    },
+    exp: Date.now() + WS_TOKEN_TTL_MS,
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sigB64 = crypto.createHmac('sha256', WS_AUTH_SECRET).update(payloadB64).digest('base64url');
+  return `${payloadB64}.${sigB64}`;
+}
+
+function verifyWsToken(token: string): PlayerIdentity | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+  if (!payloadB64 || !sigB64) return null;
+  const expectedSig = crypto.createHmac('sha256', WS_AUTH_SECRET).update(payloadB64).digest('base64url');
+  if (!safeEqualText(sigB64, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
+      player?: PlayerIdentity;
+      exp?: number;
+    };
+    if (!parsed || typeof parsed.exp !== 'number' || parsed.exp <= Date.now()) return null;
+    const p = parsed.player;
+    if (!p || typeof p.id !== 'string' || !p.id.trim() || typeof p.name !== 'string') return null;
+    return {
+      id: p.id.trim().slice(0, 64),
+      name: p.name.trim().slice(0, 32) || 'Player',
+      username: typeof p.username === 'string' ? p.username.slice(0, 64) : undefined,
+      isTelegram: Boolean(p.isTelegram),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function getAppUrl(req?: express.Request): string {
   const envUrl = (process.env.APP_URL || '').trim();
   if (envUrl && envUrl !== 'MY_APP_URL') {
@@ -82,6 +153,15 @@ function verifyTelegramInitData(initData: string, botToken: string): PlayerIdent
     if (!hash) return null;
     params.delete('hash');
 
+    const authDateStr = params.get('auth_date');
+    if (authDateStr) {
+      const authDateSec = Number(authDateStr);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (!Number.isFinite(authDateSec) || nowSec - authDateSec > TELEGRAM_INITDATA_MAX_AGE_SEC || authDateSec - nowSec > 300) {
+        return null;
+      }
+    }
+
     const dataCheckString = Array.from(params.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, val]) => `${key}=${val}`)
@@ -90,7 +170,7 @@ function verifyTelegramInitData(initData: string, botToken: string): PlayerIdent
     const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
     const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-    if (computedHash !== hash) return null;
+    if (!safeEqualText(computedHash.toLowerCase(), hash.toLowerCase())) return null;
 
     const userRaw = params.get('user');
     if (!userRaw) return null;
@@ -120,6 +200,9 @@ interface ClientSession {
   autoClaim: boolean;
   stakeBirr: number | null;
   isAdmin: boolean;
+  isTokenVerified?: boolean;
+  failedAdminAttempts?: number;
+  adminLockUntil?: number;
 }
 
 class BingoRoom {
@@ -232,19 +315,23 @@ class BingoRoom {
     }
     const count = Math.min(toAdd, available.length);
     const now = Date.now();
+    const usedNames = new Set(existingHouse.map((e) => e.playerName.trim().toLowerCase()));
     for (let i = 0; i < count; i++) {
       const num = available[i];
+      const botIdentity = this.hub.pickBotEntryIdentity(usedNames);
+      usedNames.add(botIdentity.playerName.trim().toLowerCase());
       this.entries.push({
         entryId: `${this.stakeBirr}_${this.roundNumber}_house_${num}_${crypto.randomUUID().slice(0, 6)}`,
         cartelaNumber: num,
         isCustom: false,
         isHouseReserved: true,
         grid: generateCartelaGrid(num),
-        playerId: 'house_reserved',
-        playerName: 'House',
+        playerId: botIdentity.playerId,
+        playerName: botIdentity.playerName,
+        playerRank: botIdentity.playerRank,
         paidFromDeposit: 0,
         paidFromWon: 0,
-        autoClaim: false,
+        autoClaim: true,
         selectedAt: now,
       });
     }
@@ -318,7 +405,7 @@ class BingoRoom {
     );
     const endedRoundNumber = this.roundNumber;
     const roundStartedAt = this.phaseStartedAt;
-    const roundPlayersCount = this.getUniquePlayersCount();
+    const roundPlayersCount = Math.max(this.getUniquePlayersCount(), this.getDisplayedPlayersCount());
     const roundEntriesCount = realEntries.length;
     const roundCalledNumbers = [...this.calledNumbers];
 
@@ -331,13 +418,17 @@ class BingoRoom {
     this.queuedNumbers = [];
 
     for (const w of winners) {
-      w.playerRank = w.playerRank || this.hub.getPlayerRankTier(w.playerId);
-      this.hub.creditWin(w.playerId, w.prizeAmount);
+      const isBot = isBotPlayerId(w.playerId);
+      w.playerRank = w.playerRank || (isBot ? 'bronze' : this.hub.getPlayerRankTier(w.playerId));
+      if (!isBot) {
+        this.hub.creditWin(w.playerId, w.prizeAmount);
+      }
       this.hub.recordWinner(w);
     }
 
-    if (realEntries.length > 0 || winners.length > 0) {
-      void this.hub.recordRoundEndMissions(realEntries, winners);
+    const realWinners = winners.filter((w) => !isBotPlayerId(w.playerId));
+    if (realEntries.length > 0 || realWinners.length > 0) {
+      void this.hub.recordRoundEndMissions(realEntries, realWinners);
     }
 
     if (roundEntriesCount > 0 || winners.length > 0) {
@@ -404,7 +495,7 @@ class BingoRoom {
       return;
     }
     if (this.phase === 'CALLING') {
-      const matched = this.findMatchingEntries(this.entries.filter((e) => !e.isHouseReserved));
+      const matched = this.findMatchingEntries(this.entries);
       if (matched.length > 0) {
         const totalPrize = this.getPrizePool();
         const splitPrize = Math.max(0, Math.round(totalPrize / matched.length));
@@ -541,7 +632,7 @@ class BingoRoom {
 
   private checkAutoClaimWinners(roundAtCall: number) {
     if (this.isPaused || this.phase !== 'CALLING' || this.roundNumber !== roundAtCall) return;
-    const autoEntries = this.entries.filter((e) => !e.isHouseReserved && e.autoClaim);
+    const autoEntries = this.entries.filter((e) => e.autoClaim);
     if (autoEntries.length === 0) return;
 
     const matched = this.findMatchingEntries(autoEntries);
@@ -694,7 +785,7 @@ class BingoHub {
       return Math.min(120, sec);
     })(),
     maxCartelas: TOTAL_CARTELAS,
-    seasonTheme: 'enkutatash',
+    seasonTheme: 'none',
     rankThresholds: { ...DEFAULT_RANK_THRESHOLDS },
     missionCompletionBonus: 50,
     onlineCountOverride: null,
@@ -707,6 +798,7 @@ class BingoHub {
   public specialEvents: SpecialEvent[] = [];
   public dailyMissions: DailyMission[] = [];
   public extraAdminIds = new Set<string>();
+  public botPlayerNames: string[] = [];
   public bannedPlayers = new Set<string>();
   private totalDepositedMap = new Map<string, number>();
   private leaderboardMap = new Map<string, LeaderboardEntry>();
@@ -758,6 +850,33 @@ class BingoHub {
     return computeRankTier(totalDep, this.settings.rankThresholds);
   }
 
+  public getBotNamePool(): string[] {
+    return this.botPlayerNames.length > 0 ? this.botPlayerNames : DEFAULT_BOT_PLAYER_NAMES;
+  }
+
+  public pickBotEntryIdentity(usedNames?: Set<string>): {
+    playerId: string;
+    playerName: string;
+    playerRank: RankTierId;
+  } {
+    const pool = this.getBotNamePool();
+    const fresh = usedNames ? pool.filter((n) => !usedNames.has(n.trim().toLowerCase())) : pool;
+    const candidates = fresh.length > 0 ? fresh : pool;
+    const chosenName = candidates[crypto.randomInt(0, candidates.length)] || 'Player';
+    const slug =
+      chosenName
+        .toLowerCase()
+        .replace(/[^a-z0-9\u1200-\u137f]+/gi, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 32) || `player_${crypto.randomInt(100, 999)}`;
+    const ranks: RankTierId[] = ['bronze', 'bronze', 'silver', 'silver', 'gold'];
+    return {
+      playerId: `bot_${slug}`,
+      playerName: chosenName,
+      playerRank: ranks[crypto.randomInt(0, ranks.length)],
+    };
+  }
+
   public getActiveSpecialEvents(): SpecialEvent[] {
     const nowMs = Date.now();
     return this.specialEvents.filter(
@@ -785,6 +904,7 @@ class BingoHub {
     extraAdminIds?: string[];
     customRecentWinners?: RoundWinner[] | null;
     customLeaderboard?: LeaderboardEntry[] | null;
+    botPlayerNames?: string[];
   }) {
     if (config.adminPin) {
       EFFECTIVE_ADMIN_PIN = config.adminPin;
@@ -844,6 +964,38 @@ class BingoHub {
       this.customLeaderboard = config.customLeaderboard ?? null;
       this.cachedLeaderboard = null;
     }
+    if (Array.isArray(config.botPlayerNames)) {
+      const prevSig = this.botPlayerNames.join('|');
+      this.botPlayerNames = config.botPlayerNames
+        .map((n) => String(n).trim().slice(0, 32))
+        .filter(Boolean);
+      if (this.botPlayerNames.join('|') !== prevSig) {
+        for (const room of this.rooms.values()) {
+          if (room.phase === 'OPENING') {
+            const usedNames = new Set<string>();
+            for (const entry of room.entries) {
+              if (entry.isHouseReserved) {
+                const botIdentity = this.pickBotEntryIdentity(usedNames);
+                usedNames.add(botIdentity.playerName.trim().toLowerCase());
+                entry.playerId = botIdentity.playerId;
+                entry.playerName = botIdentity.playerName;
+                entry.playerRank = botIdentity.playerRank;
+                entry.autoClaim = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  public applyBotPlayerNamesLive(names: string[]) {
+    this.applyLiveConfig({ botPlayerNames: names });
+    for (const room of this.rooms.values()) {
+      this.broadcastRoom(room.stakeBirr, { type: 'state:sync', state: room.getPublicState() });
+    }
+    this.broadcastLobby();
+    this.broadcastAdmins();
   }
 
   private async hydrateFromSupabase() {
@@ -911,7 +1063,7 @@ class BingoHub {
         this.dailyMissions = liveSync.dailyMissions;
         configOrContentChanged = true;
         for (const [ws, sess] of this.clients.entries()) {
-          if (sess.player?.isTelegram && ws.readyState === WebSocket.OPEN) {
+          if (sess.player?.isTelegram && sess.isTokenVerified && ws.readyState === WebSocket.OPEN) {
             const shouldBeAdmin = this.isAdminTelegramId(sess.player.id);
             if (sess.isAdmin !== shouldBeAdmin) {
               sess.isAdmin = shouldBeAdmin;
@@ -1022,7 +1174,7 @@ class BingoHub {
         playerId,
         this.playerNames.get(playerId) || 'Player',
         w,
-        this.playerLanguages.get(playerId) || 'en',
+        this.playerLanguages.get(playerId) || 'am',
         this.playerUsernames.get(playerId)
       );
     } else {
@@ -1136,7 +1288,7 @@ class BingoHub {
       playerId,
       this.playerNames.get(playerId) || 'Player',
       w,
-      this.playerLanguages.get(playerId) || 'en',
+      this.playerLanguages.get(playerId) || 'am',
       this.playerUsernames.get(playerId)
     );
     for (const [ws, session] of this.clients.entries()) {
@@ -1459,35 +1611,62 @@ class BingoHub {
     if (!session) return;
 
     if (msg.type === 'auth') {
-      const cleanName = (msg.player?.name || 'Player').trim().slice(0, 32) || 'Player';
-      const cleanId = (msg.player?.id || '').trim().slice(0, 64);
-      if (!cleanId) {
-        this.send(ws, { type: 'action:error', message: 'Missing player identity.' });
+      const tokenStr = typeof msg.token === 'string' ? msg.token.trim() : '';
+      const verifiedPlayer = tokenStr ? verifyWsToken(tokenStr) : null;
+      const rawId = (msg.player?.id || '').trim().slice(0, 64);
+      const claimsTelegram = Boolean(msg.player?.isTelegram) || rawId.startsWith('tg_');
+
+      if (!verifiedPlayer && BOT_TOKEN && claimsTelegram) {
+        this.send(ws, {
+          type: 'action:error',
+          message: 'Telegram session verification required. Please reopen the game from Telegram.',
+        });
         return;
       }
-      session.player = {
-        id: cleanId,
-        name: cleanName,
-        username: msg.player.username,
-        isTelegram: Boolean(msg.player.isTelegram),
-      };
+
+      let resolvedPlayer: PlayerIdentity;
+      let tokenVerified = false;
+      if (verifiedPlayer) {
+        resolvedPlayer = verifiedPlayer;
+        tokenVerified = true;
+      } else {
+        const cleanName = (msg.player?.name || 'Player').trim().slice(0, 32) || 'Player';
+        if (!rawId) {
+          this.send(ws, { type: 'action:error', message: 'Missing player identity.' });
+          return;
+        }
+        resolvedPlayer = {
+          id: rawId,
+          name: cleanName,
+          username: msg.player.username,
+          isTelegram: Boolean(msg.player.isTelegram),
+        };
+      }
+
+      session.player = resolvedPlayer;
+      session.isTokenVerified = tokenVerified;
       if (typeof msg.autoClaim === 'boolean') {
         session.autoClaim = msg.autoClaim;
       }
-      const wallet = this.ensureWallet(cleanId, cleanName, msg.player.username, msg.language);
+      const wallet = this.ensureWallet(
+        resolvedPlayer.id,
+        resolvedPlayer.name,
+        resolvedPlayer.username,
+        msg.language
+      );
       this.send(ws, { type: 'wallet:sync', wallet: { ...wallet } });
 
-      const knownLang = this.getPlayerLanguage(cleanId);
+      const knownLang = this.getPlayerLanguage(resolvedPlayer.id);
       if (knownLang) {
         this.send(ws, { type: 'language:sync', language: knownLang });
       }
 
-      if (msg.player.isTelegram && this.isAdminTelegramId(cleanId)) {
+      if (tokenVerified && resolvedPlayer.isTelegram && this.isAdminTelegramId(resolvedPlayer.id)) {
         session.isAdmin = true;
         this.sendAdminStatus(ws, true);
       }
       this.send(ws, { type: 'lobby:sync', lobby: this.getLobbySnapshot() });
-      void this.pushMissionsToPlayer(cleanId);
+      void this.pushMissionsToPlayer(resolvedPlayer.id);
       if (session.stakeBirr !== null) {
         const room = this.rooms.get(session.stakeBirr);
         if (room) this.send(ws, { type: 'state:sync', state: room.getPublicState() });
@@ -1504,10 +1683,25 @@ class BingoHub {
     }
 
     if (msg.type === 'admin_auth') {
-      if (msg.pin && msg.pin.trim() === EFFECTIVE_ADMIN_PIN) {
+      const now = Date.now();
+      if (session.adminLockUntil && now < session.adminLockUntil) {
+        const waitSec = Math.max(1, Math.ceil((session.adminLockUntil - now) / 1000));
+        this.sendAdminStatus(ws, false, `Too many failed PIN attempts. Try again in ${waitSec}s.`);
+        return;
+      }
+      const pinInput = typeof msg.pin === 'string' ? msg.pin.trim() : '';
+      if (pinInput && safeEqualText(pinInput, EFFECTIVE_ADMIN_PIN)) {
+        session.failedAdminAttempts = 0;
+        session.adminLockUntil = 0;
         session.isAdmin = true;
         this.sendAdminStatus(ws, true, 'Admin unlocked.');
       } else {
+        const attempts = (session.failedAdminAttempts || 0) + 1;
+        session.failedAdminAttempts = attempts;
+        if (attempts >= 5) {
+          session.adminLockUntil = now + 30_000;
+          session.failedAdminAttempts = 0;
+        }
         session.isAdmin = false;
         this.sendAdminStatus(ws, false, 'Incorrect Admin PIN.');
       }
@@ -2296,7 +2490,7 @@ class BingoHub {
         },
       ];
       for (const other of room.entries) {
-        if (other.entryId === entry.entryId || other.isHouseReserved || !other.autoClaim) continue;
+        if (other.entryId === entry.entryId || !other.autoClaim) continue;
         const otherRes = checkWinningPattern(other.grid, room.calledNumbers);
         if (otherRes.won) {
           allWinning.push({
@@ -2366,7 +2560,7 @@ class BingoHub {
             id,
             name: this.playerNames.get(id) || id,
             username: this.playerUsernames.get(id) || null,
-            language: this.playerLanguages.get(id) || 'en',
+            language: this.playerLanguages.get(id) || 'am',
             deposited_birr: Number(w.depositedBalance || 0),
             won_birr: Number(w.wonBalance || 0),
             total_deposited_birr: Number(this.totalDepositedMap.get(id) ?? w.totalDeposited ?? 0),
@@ -2388,7 +2582,7 @@ class BingoHub {
           if (sess.player) {
             void this.pushMissionsToPlayer(sess.player.id);
           }
-          if (sess.player?.isTelegram && ws.readyState === WebSocket.OPEN) {
+          if (sess.player?.isTelegram && sess.isTokenVerified && ws.readyState === WebSocket.OPEN) {
             const shouldBeAdmin = this.isAdminTelegramId(sess.player.id);
             if (sess.isAdmin !== shouldBeAdmin) {
               sess.isAdmin = shouldBeAdmin;
@@ -2583,6 +2777,26 @@ async function startServer() {
     res.json({ data: result.data ?? null });
   });
 
+  app.post('/api/admin/bot-names', async (req, res) => {
+    const { pin, bot_player_names } = (req.body || {}) as {
+      pin?: string;
+      bot_player_names?: string;
+    };
+    const providedPin = typeof pin === 'string' ? pin.trim() : '';
+    let authorized = Boolean(providedPin && safeEqualText(providedPin, EFFECTIVE_ADMIN_PIN));
+    if (!authorized && providedPin && supabaseStore.isEnabled) {
+      const check = await hub.handleExternalAdminRpc('admin_get_dashboard', { p_pin: providedPin });
+      authorized = !check.error;
+    }
+    if (!authorized) {
+      res.status(401).json({ error: 'Invalid Admin PIN.' });
+      return;
+    }
+    const parsed = await supabaseStore.updateBotPlayerNames(String(bot_player_names ?? ''));
+    hub.applyBotPlayerNamesLive(parsed);
+    res.json({ ok: true, bot_player_names: parsed });
+  });
+
   app.post('/api/auth/telegram', (req, res) => {
     const { initData } = req.body as { initData?: string };
     if (!BOT_TOKEN) {
@@ -2594,7 +2808,8 @@ async function startServer() {
       res.status(401).json({ verified: false, reason: 'Invalid Telegram initData signature.' });
       return;
     }
-    res.json({ verified: true, player });
+    const wsToken = signWsToken(player);
+    res.json({ verified: true, player, wsToken });
   });
 
   app.get('/api/telegram/status', async (_req, res) => {

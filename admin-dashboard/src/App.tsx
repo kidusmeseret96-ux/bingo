@@ -418,13 +418,14 @@ export default function App() {
     max_cartelas: number;
     vouchers_enabled: boolean;
     season_theme: string;
+    bot_player_names: string;
     new_pin?: string;
   }) => {
     if (!client) return;
     setBusy(true);
     setErrorMsg(null);
     try {
-      const { error } = await client.rpc('admin_update_settings', {
+      const rpcPayload = {
         p_pin: activePin,
         p_admin_group_id: patch.admin_group_id,
         p_deposit_intro: patch.deposit_intro_text,
@@ -436,11 +437,29 @@ export default function App() {
         p_max_cartelas: patch.max_cartelas,
         p_vouchers_enabled: patch.vouchers_enabled,
         p_season_theme: patch.season_theme,
-      });
-      if (error) throw new Error(error.message);
+        p_bot_player_names: patch.bot_player_names,
+      };
+      let { error } = await client.rpc('admin_update_settings', rpcPayload);
+      if (error) {
+        const legacyPayload = { ...rpcPayload } as Record<string, unknown>;
+        delete legacyPayload.p_bot_player_names;
+        const retry = await client.rpc('admin_update_settings', legacyPayload);
+        if (retry.error) {
+          throw new Error(error.message || retry.error.message);
+        }
+      }
       const nextPin = patch.new_pin || activePin;
+      await fetch('/api/admin/bot-names', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pin: nextPin,
+          bot_player_names: patch.bot_player_names,
+        }),
+      }).catch(() => undefined);
       await fetchSnapshot(client, nextPin);
-      flashNotice('Bot settings, cartela limits & admin list saved.');
+      flashNotice('Bot settings, player names, cartela limits & admin list saved.');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed saving settings.');
     } finally {
