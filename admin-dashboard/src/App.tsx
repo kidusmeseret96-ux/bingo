@@ -482,6 +482,7 @@ export default function App() {
     setBusy(true);
     setErrorMsg(null);
     try {
+      let savedViaServerApi = false;
       const apiRes = await fetch('/api/admin/voice-preset', {
         method: 'POST',
         credentials: 'same-origin',
@@ -489,29 +490,43 @@ export default function App() {
         body: JSON.stringify({ pin: activePin, voice_preset: voicePreset }),
       }).catch(() => null);
 
-      if (apiRes && !apiRes.ok && apiRes.status !== 404) {
+      const apiCt = apiRes?.headers.get('content-type') || '';
+      const isJsonApi = Boolean(apiRes && apiCt.includes('application/json'));
+
+      if (apiRes && apiRes.ok && isJsonApi) {
+        savedViaServerApi = true;
+      } else if (isJsonApi && apiRes && !apiRes.ok) {
         const body = (await apiRes.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Failed saving voice preset.');
       }
 
-      if (snapshot?.settings) {
-        const { error } = await client.rpc('admin_update_settings', {
-          p_pin: activePin,
-          p_admin_group_id: snapshot.settings.admin_group_id || '',
-          p_deposit_intro: snapshot.settings.deposit_intro_text || '',
-          p_withdraw_intro: snapshot.settings.withdraw_intro_text || '',
-          p_withdraw_prompt: snapshot.settings.withdraw_prompt_text || '',
-          p_new_pin: null,
-          p_extra_group_ids: snapshot.settings.extra_group_ids || '',
-          p_extra_admin_ids: snapshot.settings.extra_admin_ids || '',
-          p_max_cartelas: snapshot.settings.max_cartelas ?? 400,
-          p_vouchers_enabled: Boolean(snapshot.settings.vouchers_enabled),
-          p_season_theme: snapshot.settings.season_theme || 'none',
-          p_bot_player_names: snapshot.settings.bot_player_names || '',
-          p_voice_preset: voicePreset,
-        });
-        if (error && !apiRes?.ok) {
-          throw new Error(error.message);
+      if (!savedViaServerApi || connMode === 'supabase') {
+        if (snapshot?.settings) {
+          const { error } = await client.rpc('admin_update_settings', {
+            p_pin: activePin,
+            p_admin_group_id: snapshot.settings.admin_group_id || '',
+            p_deposit_intro: snapshot.settings.deposit_intro_text || '',
+            p_withdraw_intro: snapshot.settings.withdraw_intro_text || '',
+            p_withdraw_prompt: snapshot.settings.withdraw_prompt_text || '',
+            p_new_pin: null,
+            p_extra_group_ids: snapshot.settings.extra_group_ids || '',
+            p_extra_admin_ids: snapshot.settings.extra_admin_ids || '',
+            p_max_cartelas: snapshot.settings.max_cartelas ?? 400,
+            p_vouchers_enabled: Boolean(snapshot.settings.vouchers_enabled),
+            p_season_theme: snapshot.settings.season_theme || 'none',
+            p_bot_player_names: snapshot.settings.bot_player_names || '',
+            p_voice_preset: voicePreset,
+          });
+          if (error && !savedViaServerApi) {
+            if (/admin_update_settings|p_voice_preset|schema cache/i.test(error.message || '')) {
+              throw new Error(
+                'Run the latest Supabase SQL update in Supabase SQL Editor first to enable saving Caller Voice presets.'
+              );
+            }
+            throw new Error(error.message);
+          }
+        } else if (!savedViaServerApi) {
+          throw new Error('Dashboard settings not loaded yet. Click Sync Data and try again.');
         }
       }
 
@@ -543,7 +558,10 @@ export default function App() {
         body: JSON.stringify({ pin: activePin, bot_token: botToken, clear }),
       }).catch(() => null);
 
-      if (apiRes && apiRes.ok) {
+      const apiCt = apiRes?.headers.get('content-type') || '';
+      const isJsonApi = Boolean(apiRes && apiCt.includes('application/json'));
+
+      if (apiRes && apiRes.ok && isJsonApi) {
         const data = (await apiRes.json().catch(() => ({}))) as {
           bot_token_configured?: boolean;
           bot_token_masked?: string;
@@ -559,7 +577,7 @@ export default function App() {
         return data.bot_username || '';
       }
 
-      if (apiRes && apiRes.status !== 404) {
+      if (isJsonApi && apiRes && !apiRes.ok) {
         const body = (await apiRes.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Failed updating Telegram Bot Key.');
       }
@@ -568,7 +586,14 @@ export default function App() {
         p_pin: activePin,
         p_bot_token: clear ? '' : botToken,
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        if (/admin_update_bot_token|bot_token|schema cache/i.test(error.message || '')) {
+          throw new Error(
+            'Run the latest Supabase SQL update in Supabase SQL Editor first to enable switching Telegram Bot Keys.'
+          );
+        }
+        throw new Error(error.message);
+      }
       await fetchSnapshot(client, activePin);
       flashNotice(
         clear
