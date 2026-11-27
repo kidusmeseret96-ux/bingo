@@ -1,0 +1,6 @@
+{
+  "name": "Zemen Bingo — Live Multiplayer Bingo",
+  "description": "Live multiplayer Zemen Bingo Telegram Mini App with 30-second cartela selection rounds, live number calling, and instant win verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
