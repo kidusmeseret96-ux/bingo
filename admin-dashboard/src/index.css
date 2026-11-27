@@ -1,0 +1,35 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  body {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  .font-mono-num {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Showcase #5 Light Mode (Ice-Sky Pastel) & Showcase #1 Dark Mode (Midnight Navy + Electric Cobalt-Cyan Glow) */
+.admin-canvas {
+  background:
+    radial-gradient(ellipse 75% 42% at 10% 100%, rgba(56, 189, 248, 0.28), transparent 65%),
+    radial-gradient(ellipse 65% 38% at 92% 92%, rgba(37, 99, 235, 0.18), transparent 65%),
+    radial-gradient(ellipse 55% 30% at 50% 0%, rgba(219, 234, 254, 0.75), transparent 65%),
+    linear-gradient(155deg, #F6FAFF 0%, #EDF4FF 52%, #E2EDFE 100%);
+}
+
+.dark .admin-canvas {
+  background:
+    radial-gradient(ellipse 75% 45% at 8% 100%, rgba(0, 145, 255, 0.34), transparent 64%),
+    radial-gradient(ellipse 65% 42% at 94% 96%, rgba(6, 182, 212, 0.28), transparent 64%),
+    radial-gradient(ellipse 50% 35% at 55% 0%, rgba(37, 99, 235, 0.20), transparent 60%),
+    linear-gradient(180deg, #040816 0%, #070F24 55%, #050A19 100%);
+}
+
